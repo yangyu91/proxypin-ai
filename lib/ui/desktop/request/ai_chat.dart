@@ -131,7 +131,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
       _memory = memory;
       _includeSensitive = includeSensitive;
       _confirmActions = confirmActions;
-      _configured = type == AiProviderType.deepSeekWeb || type == AiProviderType.doubaoWeb ? _token.isNotEmpty : _apiKey.isNotEmpty;
+      _configured = type == AiProviderType.deepSeekWeb ? _token.isNotEmpty : type == AiProviderType.doubaoWeb ? isLikelyDoubaoSession(_token) : _apiKey.isNotEmpty;
       _conversation = _conversationStore.active ?? _conversationStore.create(provider: type);
       _entries
         ..clear()
@@ -297,7 +297,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
 
   Future<void> _openDoubaoLogin() async {
     final cookie = await Navigator.of(context).push<String>(MaterialPageRoute(builder: (_) => DoubaoLoginPage(onCookie: (value) => Navigator.of(context).pop(value))));
-    if (cookie != null && cookie.trim().isNotEmpty) {
+    if (cookie != null && isLikelyDoubaoSession(cookie)) {
       await AiConfig.saveToken(cookie.trim());
       await AiConfig.saveProviderType(AiProviderType.doubaoWeb);
       if (!mounted) return;
@@ -422,7 +422,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
                   _skills = skills;
                   _includeSensitive = includeSensitive;
                   _confirmActions = confirmActions;
-                  _configured = provider == AiProviderType.deepSeekWeb || provider == AiProviderType.doubaoWeb ? _token.isNotEmpty : key.isNotEmpty;
+                  _configured = provider == AiProviderType.deepSeekWeb ? _token.isNotEmpty : provider == AiProviderType.doubaoWeb ? isLikelyDoubaoSession(_token) : key.isNotEmpty;
                 });
                 if (_configured) _buildProvider();
                 if (ctx.mounted) Navigator.pop(ctx);

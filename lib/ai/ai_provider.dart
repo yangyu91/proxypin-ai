@@ -23,6 +23,11 @@ class AiStreamCallbacks {
   AiStreamCallbacks({this.onText, this.onReasoning, this.onFinished, this.onError});
 }
 
+bool isLikelyDoubaoSession(String raw) {
+  final value = raw.toLowerCase();
+  return value.contains('sessionid') || value.contains('session_id') || value.contains('sid_guard') || value.contains('passport_csrf_token');
+}
+
 abstract class AiProvider {
   String get name;
   Future<void> sendMessageStreaming(String prompt, AiStreamCallbacks callbacks);
@@ -148,6 +153,10 @@ class DoubaoWebProvider implements AiProvider {
 
   @override
   Future<void> sendMessageStreaming(String prompt, AiStreamCallbacks callbacks) async {
+    if (!isLikelyDoubaoSession(cookie)) {
+      callbacks.onError?.call(const FormatException('豆包登录态无效或已过期，请重新打开豆包登录页并读取登录态'));
+      return;
+    }
     try {
       final request = await _httpClient.postUrl(_endpoint());
       request.headers.set('Content-Type', 'application/json');
@@ -166,6 +175,7 @@ class DoubaoWebProvider implements AiProvider {
       request.add(utf8.encode(jsonEncode(body)));
       final response = await request.close();
       final raw = await response.transform(utf8.decoder).join();
+      if (response.statusCode == 401 || response.statusCode == 403) throw HttpException('豆包登录态已失效（HTTP ${response.statusCode}），请重新登录并读取登录态');
       if (response.statusCode < 200 || response.statusCode >= 300) throw HttpException('豆包网页请求失败（HTTP ${response.statusCode}），请重新登录或检查 Cookie');
       final content = _extractDoubaoText(raw);
       if (content.isEmpty) throw const FormatException('豆包没有返回可读文本；网页协议可能已更新，请改用豆包浏览器页登录后重试');
