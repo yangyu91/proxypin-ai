@@ -49,7 +49,7 @@ class ProxyPinMcpBridge {
       return;
     }
     try {
-      final body = await request.transform(utf8.decoder).join();
+      final body = await request.cast<List<int>>().transform(utf8.decoder).join();
       final message = jsonDecode(body);
       final response = await _dispatch(message is Map<String, dynamic> ? message : <String, dynamic>{});
       request.response.write(jsonEncode(response));
