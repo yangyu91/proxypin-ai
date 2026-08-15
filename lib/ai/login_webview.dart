@@ -162,9 +162,6 @@ class _DoubaoLoginPageState extends State<DoubaoLoginPage> {
       setState(() => _status = '未检测到有效豆包登录态。请确认已登录，并检查页面是否完成跳转；也可以在下方手动粘贴 Cookie。');
       return;
     }
-    try {
-      await _nativeChannel.invokeMethod<void>('flushCookies');
-    } catch (_) {}
     widget.onCookie(cookie);
     if (mounted) setState(() => _status = '已检测到豆包完整登录态，正在返回 AI 设置…');
   }
