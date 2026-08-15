@@ -7,7 +7,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:proxy_manager/proxy_manager.dart';
+import 'package:proxypin_ai/network/channel/host_port.dart';
 import 'package:proxypin_ai/ai/ai_config.dart';
 import 'package:proxypin_ai/ai/builtin_skills.dart';
 import 'package:proxypin_ai/ai/ai_conversation_store.dart';
