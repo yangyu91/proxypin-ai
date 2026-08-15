@@ -6,6 +6,7 @@ import 'dart:convert';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:proxypin_ai/ai/ai_config.dart';
+import 'package:proxypin_ai/ai/builtin_skills.dart';
 import 'package:proxypin_ai/ai/ai_provider.dart';
 import 'package:proxypin_ai/ai/login_webview.dart';
 import 'package:proxypin_ai/network/http/http.dart';
@@ -139,7 +140,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
 
     // 抓包数据上下文
     final context = buildCaptureContext(widget.requestsProvider(), currentRequest: widget.currentRequest, includeSensitive: _includeSensitive);
-    final skillsText = _skills.isEmpty ? '' : '\n\n用户 Skill：\n${_skills.map((skill) => '- $skill').join('\n')}';
+    final skillsText = '\n\n内置调试 Skill：\n${BuiltinSkills.all.join('\n\n')}\n\n用户 Skill：\n${_skills.map((skill) => '- $skill').join('\n')}';
     final memoryText = _memory.isEmpty ? '' : '\n\n长期记忆：\n${_memory.take(12).map((entry) => '${entry['role']}: ${entry['content']}').join('\n')}';
 
     setState(() {

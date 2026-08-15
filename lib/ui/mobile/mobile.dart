@@ -46,6 +46,9 @@ import 'package:proxypin_ai/ui/mobile/menu/bottom_navigation.dart';
 import 'package:proxypin_ai/ui/mobile/menu/menu.dart';
 import 'package:proxypin_ai/ui/mobile/request/history.dart';
 import 'package:proxypin_ai/ui/mobile/request/list.dart';
+import 'package:proxypin_ai/ui/mobile/browser/browser_page.dart';
+import 'package:proxypin_ai/ui/desktop/request/ai_chat.dart';
+import 'package:proxypin_ai/mcp/mcp_bridge.dart';
 import 'package:proxypin_ai/ui/mobile/request/search.dart';
 import 'package:proxypin_ai/ui/mobile/widgets/pip.dart';
 import 'package:proxypin_ai/ui/mobile/widgets/remote_device.dart';
@@ -92,6 +95,7 @@ class MobileHomeState extends State<MobileHomePage> implements EventListener, Li
   StreamSubscription<HistoryItem>? _remoteHistorySubscription;
 
   late ProxyServer proxyServer;
+  ProxyPinMcpBridge? mcpBridge;
 
   AppLocalizations get localizations => AppLocalizations.of(context)!;
 
@@ -127,6 +131,12 @@ class MobileHomeState extends State<MobileHomePage> implements EventListener, Li
     proxyServer = ProxyServer(widget.configuration);
     proxyServer.addListener(this);
     proxyServer.start();
+    mcpBridge = ProxyPinMcpBridge(
+      requestsProvider: () => MobileApp.container.toList(),
+      proxyRunningProvider: () => proxyServer.isRunning,
+      proxyPort: proxyServer.port,
+    );
+    mcpBridge!.start();
     _remoteHistorySubscription = HistoryStorage.onRemoteImported.listen((item) => _openHistoryPage(item));
 
     if (widget.appConfiguration.upgradeNoticeV30) {
@@ -161,6 +171,7 @@ class MobileHomeState extends State<MobileHomePage> implements EventListener, Li
   void dispose() {
     AppLifecycleBinding.instance.removeListener(this);
     _remoteHistorySubscription?.cancel();
+    mcpBridge?.stop();
     super.dispose();
   }
 
@@ -184,31 +195,28 @@ class MobileHomeState extends State<MobileHomePage> implements EventListener, Li
 
   int exitTime = 0;
 
+  var browserNavigatorKey = GlobalKey<NavigatorState>();
   var requestPageNavigatorKey = GlobalKey<NavigatorState>();
-  var toolboxNavigatorKey = GlobalKey<NavigatorState>();
-  var configNavigatorKey = GlobalKey<NavigatorState>();
-  var settingNavigatorKey = GlobalKey<NavigatorState>();
+  var aiNavigatorKey = GlobalKey<NavigatorState>();
 
   @override
   Widget build(BuildContext context) {
     var navigationView = [
       NavigatorPage(
-          navigatorKey: requestPageNavigatorKey,
-          child: RequestPage(proxyServer: proxyServer, appConfiguration: widget.appConfiguration)),
+        navigatorKey: browserNavigatorKey,
+        child: ProxyPinBrowserPage(requestsProvider: () => MobileApp.container.toList()),
+      ),
       NavigatorPage(
-          navigatorKey: toolboxNavigatorKey,
-          child: Scaffold(
-              appBar: PreferredSize(
-                  preferredSize: const Size.fromHeight(42),
-                  child: AppBar(
-                      title: Text(localizations.toolbox,
-                          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w400)),
-                      centerTitle: true)),
-              body: Toolbox(proxyServer: proxyServer))),
-      NavigatorPage(navigatorKey: configNavigatorKey, child: ConfigPage(proxyServer: proxyServer)),
+        navigatorKey: requestPageNavigatorKey,
+        child: RequestPage(proxyServer: proxyServer, appConfiguration: widget.appConfiguration),
+      ),
       NavigatorPage(
-          navigatorKey: settingNavigatorKey,
-          child: SettingPage(proxyServer: proxyServer, appConfiguration: widget.appConfiguration)),
+        navigatorKey: aiNavigatorKey,
+        child: Scaffold(
+          appBar: AppBar(title: const Text('AI 工作台'), centerTitle: true),
+          body: AiChatPanel(requestsProvider: () => MobileApp.container.toList()),
+        ),
+      ),
     ];
 
     if (!widget.appConfiguration.bottomNavigation) _selectIndex.value = 0;
@@ -261,21 +269,17 @@ class MobileHomeState extends State<MobileHomePage> implements EventListener, Li
                             elevation: 0,
                             items: [
                               BottomNavigationBarItem(
+                                  tooltip: '浏览器',
+                                  icon: const Icon(Icons.language_outlined),
+                                  label: '浏览器'),
+                              BottomNavigationBarItem(
                                   tooltip: localizations.requests,
                                   icon: const Icon(Icons.workspaces_outlined),
                                   label: localizations.requests),
                               BottomNavigationBarItem(
-                                  tooltip: localizations.toolbox,
-                                  icon: const Icon(Icons.hardware_outlined),
-                                  label: localizations.toolbox),
-                              BottomNavigationBarItem(
-                                  tooltip: localizations.config,
-                                  icon: const Icon(Icons.description_outlined),
-                                  label: localizations.config),
-                              BottomNavigationBarItem(
-                                  tooltip: localizations.setting,
-                                  icon: const Icon(Icons.settings_outlined),
-                                  label: localizations.setting),
+                                  tooltip: 'AI 工作台',
+                                  icon: const Icon(Icons.auto_awesome_outlined),
+                                  label: 'AI 工作台'),
                             ],
                             currentIndex: _selectIndex.value,
                             onTap: (index) => _selectIndex.value = index,
@@ -575,7 +579,7 @@ class _MobileAppBar extends StatelessWidget implements PreferredSizeWidget {
               icon: const Icon(Icons.delete_outline),
               onPressed: () => _onClear(context, localizations)),
           const SizedBox(width: 2),
-          MoreMenu(proxyServer: proxyServer, remoteDevice: remoteDevice),
+          MoreMenu(proxyServer: proxyServer, remoteDevice: remoteDevice, configuration: proxyServer.configuration),
           const SizedBox(width: 10),
         ]);
   }

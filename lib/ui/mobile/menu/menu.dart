@@ -19,9 +19,11 @@ import 'package:date_format/date_format.dart';
 import 'package:flutter/material.dart';
 import 'package:proxypin_ai/l10n/app_localizations.dart';
 import 'package:proxypin_ai/network/bin/server.dart';
+import 'package:proxypin_ai/network/bin/configuration.dart';
 import 'package:proxypin_ai/ui/mobile/mobile.dart';
 import 'package:proxypin_ai/ui/mobile/setting/app_filter.dart';
 import 'package:proxypin_ai/ui/mobile/setting/report_servers.dart';
+import 'package:proxypin_ai/ui/mobile/setting/proxy_subscriptions.dart';
 import 'package:proxypin_ai/ui/mobile/setting/ssl.dart';
 import 'package:proxypin_ai/ui/mobile/widgets/highlight.dart';
 import 'package:proxypin_ai/ui/mobile/widgets/remote_device.dart';
@@ -32,8 +34,9 @@ class MoreMenu extends StatelessWidget {
 
   final ProxyServer proxyServer;
   final ValueNotifier<RemoteModel> remoteDevice;
+  final Configuration? configuration;
 
-  const MoreMenu({super.key, required this.proxyServer, required this.remoteDevice});
+  const MoreMenu({super.key, required this.proxyServer, required this.remoteDevice, this.configuration});
 
   @override
   Widget build(BuildContext context) {
@@ -47,6 +50,15 @@ class MoreMenu extends StatelessWidget {
       child: const SizedBox(height: 38, width: 38, child: Icon(Icons.more_vert, size: 26)),
       itemBuilder: (BuildContext context) {
         return <PopupMenuEntry>[
+          PopupMenuItem(
+              height: 32,
+              child: ListTile(
+                  dense: true,
+                  title: const Text('代理订阅与节点'),
+                  leading: const Icon(Icons.hub_outlined),
+                  onTap: () {
+                    navigator(context, ProxySubscriptionsPage(configuration: configuration));
+                  })),
           PopupMenuItem(
               height: 32,
               child: ListTile(
