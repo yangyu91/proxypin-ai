@@ -9,8 +9,10 @@ import com.network.proxy.plugin.InstalledAppsPlugin
 import com.network.proxy.plugin.PictureInPicturePlugin
 import com.network.proxy.plugin.ProcessInfoPlugin
 import com.network.proxy.plugin.VpnServicePlugin
+import android.webkit.CookieManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.MethodChannel
 
 
 class MainActivity : FlutterActivity() {
@@ -19,6 +21,21 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         pluginRegister(flutterEngine)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.proxy/doubao")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "getCookies" -> {
+                        val url = call.argument<String>("url") ?: "https://www.doubao.com/"
+                        val cookies = CookieManager.getInstance().getCookie(url) ?: ""
+                        result.success(cookies)
+                    }
+                    "flushCookies" -> {
+                        CookieManager.getInstance().flush()
+                        result.success(true)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
     }
 
     override fun onUserLeaveHint() {

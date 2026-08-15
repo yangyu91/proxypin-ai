@@ -5,6 +5,7 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import 'ai_config.dart';
@@ -82,6 +83,7 @@ class _DoubaoLoginPageState extends State<DoubaoLoginPage> {
   bool _loading = true;
   String _status = '请在页面中完成豆包登录，然后点击右上角“读取登录态”';
   static const _doubaoUrl = 'https://www.doubao.com/chat/';
+  static const _nativeChannel = MethodChannel('com.proxy/doubao');
 
   @override
   void initState() {
@@ -112,6 +114,12 @@ class _DoubaoLoginPageState extends State<DoubaoLoginPage> {
   Future<void> _extractCookie() async {
     setState(() => _status = '正在读取当前页面登录态…');
     try {
+      String nativeCookie = '';
+      try {
+        nativeCookie = await _nativeChannel.invokeMethod<String>('getCookies', {'url': _doubaoUrl}) ?? '';
+      } catch (_) {
+        // 原生 CookieManager 不可用时仍继续读取网页可见 Cookie 和 LocalStorage。
+      }
       await _controller?.runJavaScript('''
         (function() {
           try {
@@ -120,7 +128,7 @@ class _DoubaoLoginPageState extends State<DoubaoLoginPage> {
               var key = localStorage.key(i);
               if (key) values[key] = localStorage.getItem(key);
             }
-            CookieExtractor.postMessage(JSON.stringify({cookie: document.cookie || '', localStorage: values}));
+            CookieExtractor.postMessage(JSON.stringify({cookie: document.cookie || '', nativeCookie: ${jsonEncode(nativeCookie)}, localStorage: values}));
           } catch (e) { CookieExtractor.postMessage(''); }
         })();
       ''');
@@ -135,8 +143,9 @@ class _DoubaoLoginPageState extends State<DoubaoLoginPage> {
       final decoded = jsonDecode(cookie);
       if (decoded is Map) {
         final cookiePart = decoded['cookie']?.toString() ?? '';
+        final nativeCookie = decoded['nativeCookie']?.toString() ?? '';
         final storage = decoded['localStorage'];
-        final candidates = <String>[cookiePart];
+        final candidates = <String>[nativeCookie, cookiePart];
         if (storage is Map) {
           for (final entry in storage.entries) {
             final key = entry.key.toString().toLowerCase();
@@ -153,8 +162,11 @@ class _DoubaoLoginPageState extends State<DoubaoLoginPage> {
       setState(() => _status = '未检测到有效豆包登录态。请确认已登录，并检查页面是否完成跳转；也可以在下方手动粘贴 Cookie。');
       return;
     }
+    try {
+      await _nativeChannel.invokeMethod<void>('flushCookies');
+    } catch (_) {}
     widget.onCookie(cookie);
-    if (mounted) setState(() => _status = '已检测到豆包会话，正在返回 AI 设置…');
+    if (mounted) setState(() => _status = '已检测到豆包完整登录态，正在返回 AI 设置…');
   }
 
   Future<void> _clearAndReload() async {
