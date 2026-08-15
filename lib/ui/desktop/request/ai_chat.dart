@@ -330,7 +330,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
   }
 
   Future<void> _pickAndAnalyzeImage() async {
-    final result = await FilePicker.platform.pickFiles(type: FileType.image, withData: true);
+    final result = await FilePicker.pickFiles(type: FileType.image, withData: true);
     final bytes = result?.files.single.bytes;
     if (bytes == null || bytes.isEmpty || _provider == null || _sending) return;
     final prompt = _inputController.text.trim().isEmpty ? '请识别并分析这张图片与当前抓包调试的关系。' : _inputController.text.trim();
@@ -533,8 +533,8 @@ class _AiChatPanelState extends State<AiChatPanel> {
     return SelectableText.rich(TextSpan(style: style.copyWith(height: 1.45), children: spans));
   }
 
-  List<InlineSpan> _inlineSpans(String text, TextStyle style) {
-    final spans = <InlineSpan>[];
+  List<TextSpan> _inlineSpans(String text, TextStyle style) {
+    final spans = <TextSpan>[];
     final pattern = RegExp(r'(\*\*|__)(.+?)\1');
     var cursor = 0;
     for (final match in pattern.allMatches(text)) {
