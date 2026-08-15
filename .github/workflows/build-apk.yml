@@ -39,7 +39,8 @@ jobs:
           test -n "$ANDROID_KEYSTORE_PASSWORD"
           test -n "$ANDROID_KEY_ALIAS"
           test -n "$ANDROID_KEY_PASSWORD"
-          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/yangyu91-release.jks
+          # build.gradle 的 file(storeFile) 相对于 android/app 模块目录解析。
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/app/yangyu91-release.jks
           cat > android/key.properties <<EOF
           storePassword=$ANDROID_KEYSTORE_PASSWORD
           keyPassword=$ANDROID_KEY_PASSWORD
