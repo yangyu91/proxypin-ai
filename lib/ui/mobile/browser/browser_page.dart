@@ -19,7 +19,7 @@ class ProxyPinBrowserPage extends StatefulWidget {
 }
 
 class _ProxyPinBrowserPageState extends State<ProxyPinBrowserPage> {
-  static const _homeUrl = 'https://www.google.com';
+  static const _homeUrl = 'https://www.baidu.com/';
   late final WebViewController _controller;
   final _addressController = TextEditingController(text: _homeUrl);
   bool _loading = true;
@@ -68,7 +68,11 @@ class _ProxyPinBrowserPageState extends State<ProxyPinBrowserPage> {
   Future<void> _openAddress() async {
     final raw = _addressController.text.trim();
     if (raw.isEmpty) return;
-    final value = raw.contains('://') ? raw : 'https://$raw';
+    final value = raw.contains('://')
+        ? raw
+        : (raw.contains('.') && !raw.contains(' ')
+            ? 'https://$raw'
+            : 'https://www.baidu.com/s?wd=${Uri.encodeComponent(raw)}');
     await _controller.loadRequest(Uri.tryParse(value) ?? Uri.parse(_homeUrl));
   }
 

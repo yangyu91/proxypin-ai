@@ -5,6 +5,8 @@ import 'dart:convert';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:proxypin_ai/ai/ai_config.dart';
 import 'package:proxypin_ai/ai/builtin_skills.dart';
 import 'package:proxypin_ai/ai/ai_conversation_store.dart';
@@ -662,36 +664,32 @@ class _AiChatPanelState extends State<AiChatPanel> {
   }
 
   Widget _buildFormattedText(String text, TextStyle? baseStyle) {
-    final style = baseStyle ?? const TextStyle(fontSize: 14);
-    final spans = <TextSpan>[];
-    for (final line in text.split('\n')) {
-      final trimmed = line.trimLeft();
-      if (trimmed.startsWith('#')) {
-        final heading = trimmed.replaceFirst(RegExp(r'^#+\s*'), '');
-        spans.add(TextSpan(text: '$heading\n', style: style.copyWith(fontWeight: FontWeight.w700, fontSize: (style.fontSize ?? 14) + 1)));
-      } else if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
-        spans.add(TextSpan(text: '• ', style: style.copyWith(fontWeight: FontWeight.w700)));
-        spans.addAll(_inlineSpans(trimmed.substring(2), style));
-        spans.add(const TextSpan(text: '\n'));
-      } else {
-        spans.addAll(_inlineSpans(line, style));
-        spans.add(const TextSpan(text: '\n'));
-      }
-    }
-    return SelectableText.rich(TextSpan(style: style.copyWith(height: 1.45), children: spans));
-  }
-
-  List<TextSpan> _inlineSpans(String text, TextStyle style) {
-    final spans = <TextSpan>[];
-    final pattern = RegExp(r'(\*\*|__)(.+?)\1');
-    var cursor = 0;
-    for (final match in pattern.allMatches(text)) {
-      if (match.start > cursor) spans.add(TextSpan(text: text.substring(cursor, match.start)));
-      spans.add(TextSpan(text: match.group(2), style: style.copyWith(fontWeight: FontWeight.w700)));
-      cursor = match.end;
-    }
-    if (cursor < text.length) spans.add(TextSpan(text: text.substring(cursor)));
-    return spans;
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final base = baseStyle ?? theme.textTheme.bodyMedium ?? const TextStyle(fontSize: 14);
+    final markdownStyle = MarkdownStyleSheet.fromTheme(theme).copyWith(
+      p: base.copyWith(height: 1.5),
+      h1: base.copyWith(fontSize: 22, fontWeight: FontWeight.w800, height: 1.25),
+      h2: base.copyWith(fontSize: 19, fontWeight: FontWeight.w800, height: 1.3),
+      h3: base.copyWith(fontSize: 17, fontWeight: FontWeight.w700, height: 1.35),
+      a: base.copyWith(color: scheme.primary, decoration: TextDecoration.underline),
+      code: base.copyWith(fontFamily: 'monospace', color: scheme.onSecondaryContainer, backgroundColor: scheme.secondaryContainer),
+      codeblockDecoration: BoxDecoration(color: scheme.surfaceContainerHighest, borderRadius: BorderRadius.circular(10), border: Border.all(color: scheme.outlineVariant.withValues(alpha: .55))),
+      blockquote: base.copyWith(color: scheme.onSurfaceVariant, height: 1.45),
+      blockquoteDecoration: BoxDecoration(color: scheme.surfaceContainerHighest.withValues(alpha: .45), border: Border(left: BorderSide(color: scheme.primary, width: 3))),
+      tableHead: base.copyWith(fontWeight: FontWeight.w700),
+      tableBody: base.copyWith(height: 1.35),
+      tableBorder: TableBorder.all(color: scheme.outlineVariant.withValues(alpha: .65), width: .7),
+    );
+    return MarkdownBody(
+      data: text,
+      selectable: true,
+      styleSheet: markdownStyle,
+      onTapLink: (label, href, title) {
+        final link = href == null ? null : Uri.tryParse(href);
+        if (link != null) launchUrl(link, mode: LaunchMode.externalApplication);
+      },
+    );
   }
 
   Widget _buildInput() {
