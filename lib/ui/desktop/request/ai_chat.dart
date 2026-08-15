@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:proxypin_ai/ai/ai_config.dart';
 import 'package:proxypin_ai/ai/builtin_skills.dart';
 import 'package:proxypin_ai/ai/ai_conversation_store.dart';
+import 'package:proxypin_ai/ai/ai_workspace.dart';
 import 'package:proxypin_ai/ai/ai_provider.dart';
 import 'package:proxypin_ai/ai/login_webview.dart';
 import 'package:proxypin_ai/network/http/http.dart';
@@ -102,6 +103,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
 
   Future<void> _loadConfig() async {
     await _conversationStore.load();
+    if (widget.currentRequest != null) AiWorkspace.instance.setCurrentRequest(widget.currentRequest);
     final type = await AiConfig.readProviderType();
     final token = await AiConfig.readToken();
     final apiKey = await AiConfig.readApiKey();
@@ -152,6 +154,8 @@ class _AiChatPanelState extends State<AiChatPanel> {
     final context = buildCaptureContext(widget.requestsProvider(), currentRequest: widget.currentRequest, includeSensitive: _includeSensitive);
     final skillsText = '\n\n内置调试 Skill：\n${BuiltinSkills.all.join('\n\n')}\n\n用户 Skill：\n${_skills.map((skill) => '- $skill').join('\n')}';
     final memoryText = _memory.isEmpty ? '' : '\n\n长期记忆：\n${_memory.take(12).map((entry) => '${entry['role']}: ${entry['content']}').join('\n')}';
+    final historyText = _conversation!.messages.isEmpty ? '' : '\n\n当前会话历史：\n${_conversation!.messages.take(24).map((message) => '${message.role}: ${message.content}').join('\n')}';
+    final workspaceText = AiWorkspace.instance.promptContext;
 
     await _conversationStore.append(conversationId, AiMessage(role: 'user', content: prompt));
     setState(() {
@@ -164,7 +168,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
 
     // 系统上下文 + 用户提问
     final actionPolicy = _confirmActions ? '\n涉及改包、重放或发包时，只能先输出变更预览并等待用户确认。' : '';
-    final fullPrompt = '系统提示词：$_systemPrompt$skillsText$memoryText\n\n$context\n\n用户问题：$prompt\n\n请基于上述抓包数据进行分析回答。$actionPolicy';
+    final fullPrompt = '系统提示词：$_systemPrompt$skillsText$memoryText$historyText$workspaceText\n\n$context\n\n用户问题：$prompt\n\n请基于上述抓包数据、浏览器页面和会话历史进行分析回答。$actionPolicy';
 
     try {
       await _provider!.sendMessageStreaming(

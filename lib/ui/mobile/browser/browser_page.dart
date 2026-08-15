@@ -3,6 +3,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import 'package:proxypin_ai/network/http/http.dart';
+import 'package:proxypin_ai/ai/ai_workspace.dart';
 import 'package:proxypin_ai/ui/desktop/request/ai_chat.dart';
 /// ProxyPin 内置浏览器。
 ///
@@ -40,6 +41,7 @@ class _ProxyPinBrowserPageState extends State<ProxyPinBrowserPage> {
           onPageStarted: (url) => setState(() {
             _loading = true;
             _addressController.text = url;
+            AiWorkspace.instance.setBrowserPage(url: url);
           }),
           onPageFinished: (url) async {
             final pageTitle = await _controller.getTitle();
@@ -48,6 +50,7 @@ class _ProxyPinBrowserPageState extends State<ProxyPinBrowserPage> {
               _loading = false;
               _addressController.text = url;
               _title = pageTitle?.trim().isNotEmpty == true ? pageTitle!.trim() : '浏览器';
+              AiWorkspace.instance.setBrowserPage(url: url, title: _title);
             });
           },
           onWebResourceError: (_) => setState(() => _loading = false),
@@ -87,6 +90,7 @@ class _ProxyPinBrowserPageState extends State<ProxyPinBrowserPage> {
   }
 
   void _openAi() {
+    AiWorkspace.instance.setBrowserPage(url: _addressController.text, title: _title);
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
