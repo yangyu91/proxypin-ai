@@ -3,6 +3,7 @@ library;
 
 import 'dart:convert';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:proxypin_ai/ai/ai_config.dart';
 import 'package:proxypin_ai/ai/ai_provider.dart';
@@ -10,14 +11,20 @@ import 'package:proxypin_ai/ai/login_webview.dart';
 import 'package:proxypin_ai/network/http/http.dart';
 
 /// 把抓包数据序列化成 AI 可分析的文本。
-String buildCaptureContext(List<HttpRequest> requests, {int maxBodyLength = 300}) {
+String buildCaptureContext(List<HttpRequest> requests, {int maxBodyLength = 300, HttpRequest? currentRequest, bool includeSensitive = false}) {
   final buffer = StringBuffer();
   buffer.writeln('当前抓包数据（共 ${requests.length} 条请求）：');
+  if (currentRequest != null) {
+    buffer.writeln('当前正在查看的请求：${currentRequest.method.name} ${_redactUrl(currentRequest.requestUrl, includeSensitive)}');
+  }
   for (final request in requests) {
     final response = request.response;
     final status = response?.status.code.toString() ?? '-';
-    buffer.writeln(
-        '${request.method.name} ${request.requestUrl} -> $status');
+    buffer.writeln('${request.method.name} ${_redactUrl(request.requestUrl, includeSensitive)} -> $status');
+    request.headers.forEach((key, values) {
+      final safeValues = includeSensitive || !_isSensitiveHeader(key) ? values : values.map((_) => '[已隐藏]').toList();
+      buffer.writeln('  $key: ${safeValues.join(', ')}');
+    });
 
     // 简要 body（截断）
     final bodyBytes = request.body;
@@ -37,11 +44,28 @@ String buildCaptureContext(List<HttpRequest> requests, {int maxBodyLength = 300}
   return buffer.toString();
 }
 
+bool _isSensitiveHeader(String key) {
+  final normalized = key.toLowerCase();
+  return normalized == 'authorization' || normalized == 'cookie' || normalized == 'set-cookie' || normalized.contains('token') || normalized.contains('secret') || normalized.contains('api-key') || normalized.contains('password');
+}
+
+String _redactUrl(String value, bool includeSensitive) {
+  if (includeSensitive) return value;
+  try {
+    final uri = Uri.parse(value);
+    final query = uri.queryParameters.map((key, value) => MapEntry(key, _isSensitiveHeader(key) ? '[已隐藏]' : value));
+    return uri.replace(queryParameters: query).toString();
+  } catch (_) {
+    return value;
+  }
+}
+
 /// AI 对话面板
 class AiChatPanel extends StatefulWidget {
   final List<HttpRequest> Function() requestsProvider;
+  final HttpRequest? currentRequest;
 
-  const AiChatPanel({super.key, required this.requestsProvider});
+  const AiChatPanel({super.key, required this.requestsProvider, this.currentRequest});
 
   @override
   State<AiChatPanel> createState() => _AiChatPanelState();
@@ -56,6 +80,13 @@ class _AiChatPanelState extends State<AiChatPanel> {
   AiProviderType _providerType = AiProviderType.deepSeekWeb;
   String _token = '';
   String _apiKey = '';
+  String _baseUrl = '';
+  String _model = '';
+  String _systemPrompt = AiConfig.defaultSystemPrompt;
+  List<String> _skills = [];
+  List<Map<String, String>> _memory = [];
+  bool _includeSensitive = false;
+  bool _confirmActions = true;
   bool _sending = false;
   bool _configured = false;
 
@@ -69,13 +100,26 @@ class _AiChatPanelState extends State<AiChatPanel> {
     final type = await AiConfig.readProviderType();
     final token = await AiConfig.readToken();
     final apiKey = await AiConfig.readApiKey();
+    final baseUrl = await AiConfig.readBaseUrl();
+    final model = await AiConfig.readModel();
+    final systemPrompt = await AiConfig.readSystemPrompt();
+    final skills = await AiConfig.readSkills();
+    final memory = await AiConfig.readMemory();
+    final includeSensitive = await AiConfig.readIncludeSensitive();
+    final confirmActions = await AiConfig.readConfirmActions();
+    if (!mounted) return;
     setState(() {
       _providerType = type;
       _token = token ?? '';
       _apiKey = apiKey ?? '';
-      _configured = type == AiProviderType.deepSeekWeb
-          ? (_token.isNotEmpty)
-          : (_apiKey.isNotEmpty);
+      _baseUrl = baseUrl;
+      _model = model;
+      _systemPrompt = systemPrompt;
+      _skills = skills;
+      _memory = memory;
+      _includeSensitive = includeSensitive;
+      _confirmActions = confirmActions;
+      _configured = type == AiProviderType.deepSeekWeb ? _token.isNotEmpty : _apiKey.isNotEmpty;
     });
     if (_configured) {
       _buildProvider();
@@ -83,11 +127,8 @@ class _AiChatPanelState extends State<AiChatPanel> {
   }
 
   void _buildProvider() {
-    if (_providerType == AiProviderType.deepSeekWeb) {
-      _provider = createAiProvider(_providerType, token: _token);
-    } else {
-      _provider = createAiProvider(_providerType, apiKey: _apiKey);
-    }
+    _provider?.dispose();
+    _provider = createAiProvider(_providerType, token: _token, apiKey: _apiKey, baseUrl: _baseUrl, model: _model);
   }
 
   Future<void> _send() async {
@@ -97,7 +138,9 @@ class _AiChatPanelState extends State<AiChatPanel> {
     _inputController.clear();
 
     // 抓包数据上下文
-    final context = buildCaptureContext(widget.requestsProvider());
+    final context = buildCaptureContext(widget.requestsProvider(), currentRequest: widget.currentRequest, includeSensitive: _includeSensitive);
+    final skillsText = _skills.isEmpty ? '' : '\n\n用户 Skill：\n${_skills.map((skill) => '- $skill').join('\n')}';
+    final memoryText = _memory.isEmpty ? '' : '\n\n长期记忆：\n${_memory.take(12).map((entry) => '${entry['role']}: ${entry['content']}').join('\n')}';
 
     setState(() {
       _entries.add(ChatEntry(role: 'user', content: prompt));
@@ -108,7 +151,8 @@ class _AiChatPanelState extends State<AiChatPanel> {
     final assistantIndex = _entries.length - 1;
 
     // 系统上下文 + 用户提问
-    final fullPrompt = '$context\n\n用户问题：$prompt\n\n请基于上述抓包数据进行分析回答。';
+    final actionPolicy = _confirmActions ? '\n涉及改包、重放或发包时，只能先输出变更预览并等待用户确认。' : '';
+    final fullPrompt = '系统提示词：$_systemPrompt$skillsText$memoryText\n\n$context\n\n用户问题：$prompt\n\n请基于上述抓包数据进行分析回答。$actionPolicy';
 
     try {
       await _provider!.sendMessageStreaming(
@@ -126,6 +170,11 @@ class _AiChatPanelState extends State<AiChatPanel> {
             });
           },
           onFinished: () {
+            final answer = _entries[assistantIndex].content.trim();
+            if (answer.isNotEmpty) {
+              _memory = [..._memory, {'role': 'user', 'content': prompt}, {'role': 'assistant', 'content': answer}].skip(_memory.length > 18 ? 2 : 0).toList();
+              AiConfig.saveMemory(_memory);
+            }
             setState(() => _sending = false);
           },
           onError: (error) {
@@ -170,47 +219,133 @@ class _AiChatPanelState extends State<AiChatPanel> {
     }
   }
 
+  String _providerLabel(AiProviderType type) {
+    switch (type) {
+      case AiProviderType.deepSeekWeb:
+        return 'DeepSeek 网页版';
+      case AiProviderType.deepSeekOfficial:
+        return 'DeepSeek 官方 API';
+      case AiProviderType.openAiCompatible:
+        return 'OpenAI 兼容模型';
+      case AiProviderType.siliconFlow:
+        return 'SiliconFlow 视觉模型';
+    }
+  }
+
   Future<void> _openSettings() async {
     final apiKeyController = TextEditingController(text: _apiKey);
+    final baseUrlController = TextEditingController(text: _baseUrl);
+    final modelController = TextEditingController(text: _model);
+    final promptController = TextEditingController(text: _systemPrompt);
+    final skillsController = TextEditingController(text: _skills.join('\n'));
+    var provider = _providerType;
+    var includeSensitive = _includeSensitive;
+    var confirmActions = _confirmActions;
     await showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('AI 设置'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: apiKeyController,
-              decoration: const InputDecoration(labelText: '官方 API Key（可选）'),
-              obscureText: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text('AI 工作台设置'),
+          content: SizedBox(
+            width: 520,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  DropdownButtonFormField<AiProviderType>(
+                    value: provider,
+                    decoration: const InputDecoration(labelText: '模型后端'),
+                    items: AiProviderType.values.map((item) => DropdownMenuItem(value: item, child: Text(_providerLabel(item)))).toList(),
+                    onChanged: (value) => setDialogState(() => provider = value ?? provider),
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(controller: apiKeyController, decoration: const InputDecoration(labelText: 'API Key / 本地凭据'), obscureText: true),
+                  const SizedBox(height: 10),
+                  TextField(controller: baseUrlController, decoration: const InputDecoration(labelText: 'OpenAI 兼容端点'), keyboardType: TextInputType.url),
+                  const SizedBox(height: 10),
+                  TextField(controller: modelController, decoration: const InputDecoration(labelText: '模型名称')),
+                  const SizedBox(height: 10),
+                  TextField(controller: promptController, minLines: 4, maxLines: 8, decoration: const InputDecoration(labelText: '系统提示词（可修改）', alignLabelWithHint: true),),
+                  const SizedBox(height: 10),
+                  TextField(controller: skillsController, minLines: 3, maxLines: 6, decoration: const InputDecoration(labelText: '用户 Skill（每行一条）', alignLabelWithHint: true),),
+                  const Divider(height: 24),
+                  SwitchListTile.adaptive(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('允许显示敏感字段'),
+                    subtitle: const Text('仅在明确需要时打开；默认隐藏 Token、Cookie、密码等内容'),
+                    value: includeSensitive,
+                    onChanged: (value) => setDialogState(() => includeSensitive = value),
+                  ),
+                  SwitchListTile.adaptive(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('改包/发包必须确认'),
+                    subtitle: const Text('建议保持开启，AI 只能先生成预览，不能静默发送'),
+                    value: confirmActions,
+                    onChanged: (value) => setDialogState(() => confirmActions = value),
+                  ),
+                ],
+              ),
             ),
-            const SizedBox(height: 8),
-            const Text('默认走 chat.deepseek.com 白嫖通道；填写 API Key 后自动切换官方通道。',
-                style: TextStyle(fontSize: 12)),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
-          TextButton(
-            onPressed: () async {
-              final key = apiKeyController.text.trim();
-              if (key.isNotEmpty) {
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+            FilledButton(
+              onPressed: () async {
+                final key = apiKeyController.text.trim();
+                final skills = skillsController.text.split('\n').map((value) => value.trim()).where((value) => value.isNotEmpty).toList();
                 await AiConfig.saveApiKey(key);
-                await AiConfig.saveProviderType(AiProviderType.deepSeekOfficial);
+                await AiConfig.saveProviderType(provider);
+                await AiConfig.saveBaseUrl(baseUrlController.text.trim());
+                await AiConfig.saveModel(modelController.text.trim());
+                await AiConfig.saveSystemPrompt(promptController.text.trim());
+                await AiConfig.saveSkills(skills);
+                await AiConfig.saveIncludeSensitive(includeSensitive);
+                await AiConfig.saveConfirmActions(confirmActions);
+                if (!mounted) return;
                 setState(() {
                   _apiKey = key;
-                  _providerType = AiProviderType.deepSeekOfficial;
-                  _configured = true;
+                  _providerType = provider;
+                  _baseUrl = baseUrlController.text.trim();
+                  _model = modelController.text.trim();
+                  _systemPrompt = promptController.text.trim().isEmpty ? AiConfig.defaultSystemPrompt : promptController.text.trim();
+                  _skills = skills;
+                  _includeSensitive = includeSensitive;
+                  _confirmActions = confirmActions;
+                  _configured = provider == AiProviderType.deepSeekWeb ? _token.isNotEmpty : key.isNotEmpty;
                 });
-                _buildProvider();
-              }
-              if (ctx.mounted) Navigator.pop(ctx);
-            },
-            child: const Text('保存'),
-          ),
-        ],
+                if (_configured) _buildProvider();
+                if (ctx.mounted) Navigator.pop(ctx);
+              },
+              child: const Text('保存设置'),
+            ),
+          ],
+        ),
       ),
     );
+    apiKeyController.dispose();
+    baseUrlController.dispose();
+    modelController.dispose();
+    promptController.dispose();
+    skillsController.dispose();
+  }
+
+  Future<void> _pickAndAnalyzeImage() async {
+    final result = await FilePicker.platform.pickFiles(type: FileType.image, withData: true);
+    final bytes = result?.files.single.bytes;
+    if (bytes == null || bytes.isEmpty || _provider == null || _sending) return;
+    final prompt = _inputController.text.trim().isEmpty ? '请识别并分析这张图片与当前抓包调试的关系。' : _inputController.text.trim();
+    _inputController.clear();
+    setState(() {
+      _entries.add(ChatEntry(role: 'user', content: '识图：$prompt'));
+      _entries.add(ChatEntry(role: 'assistant', content: ''));
+      _sending = true;
+    });
+    final index = _entries.length - 1;
+    await _provider!.sendImageStreaming(bytes, prompt, AiStreamCallbacks(
+      onText: (_, full) => setState(() => _entries[index].content = full),
+      onFinished: () => setState(() => _sending = false),
+      onError: (error) => setState(() { _entries[index].content = '识图失败: $error'; _sending = false; }),
+    ));
   }
 
   @override
@@ -236,7 +371,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
   Widget _buildHeader() {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    final providerName = _providerType == AiProviderType.deepSeekWeb ? 'DeepSeek 网页版' : 'DeepSeek 官方 API';
+    final providerName = _providerLabel(_providerType);
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 12, 10, 10),
       decoration: BoxDecoration(
@@ -420,6 +555,11 @@ class _AiChatPanelState extends State<AiChatPanel> {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
+            IconButton(
+              tooltip: '选择图片并识图',
+              icon: const Icon(Icons.image_outlined),
+              onPressed: _sending ? null : _pickAndAnalyzeImage,
+            ),
             Expanded(
               child: TextField(
                 controller: _inputController,

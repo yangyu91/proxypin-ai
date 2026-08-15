@@ -36,6 +36,7 @@ import 'package:proxypin_ai/ui/configuration.dart';
 import 'package:proxypin_ai/ui/content/panel.dart';
 import 'package:proxypin_ai/ui/desktop/request/request.dart';
 import 'package:proxypin_ai/ui/mobile/request/repeat.dart';
+import 'package:proxypin_ai/ui/desktop/request/ai_chat.dart';
 import 'package:proxypin_ai/ui/mobile/request/request_editor.dart';
 import 'package:proxypin_ai/ui/mobile/setting/request_rewrite.dart';
 import 'package:proxypin_ai/ui/mobile/setting/script.dart';
@@ -314,6 +315,33 @@ class RequestRowState extends State<RequestRow> {
                           },
                           label: localizations.copyCurl,
                           icon: Icons.code),
+                    ),
+                    menuItem(
+                      left: itemButton(
+                          onPressed: () {
+                            Navigator.maybePop(getContext());
+                            showModalBottomSheet<void>(
+                              context: getContext(),
+                              isScrollControlled: true,
+                              useSafeArea: true,
+                              builder: (_) => SizedBox(
+                                height: MediaQuery.of(getContext()).size.height * 0.92,
+                                child: AiChatPanel(
+                                  requestsProvider: () => [request],
+                                  currentRequest: request,
+                                ),
+                              ),
+                            );
+                          },
+                          label: 'AI 分析当前包',
+                          icon: Icons.auto_awesome_outlined),
+                      right: itemButton(
+                          onPressed: () {
+                            Navigator.maybePop(getContext());
+                            onRepeat(request);
+                          },
+                          label: localizations.repeat,
+                          icon: Icons.repeat_one),
                     ),
                     //repeat
                     menuItem(
