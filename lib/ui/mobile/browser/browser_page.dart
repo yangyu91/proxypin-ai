@@ -101,10 +101,12 @@ class _ProxyPinBrowserPageState extends State<ProxyPinBrowserPage> {
     final running = await AndroidVpnController.isRunning();
     final config = await Configuration.instance;
     final proxy = config.externalProxy;
+    final proxyHost = proxy?.host;
+    final proxyPort = proxy?.port;
     ProxyNode? matchingNode;
-    if (proxy?.host != null && proxy?.port != null) {
+    if (proxyHost != null && proxyPort != null) {
       for (final node in SubscriptionManager.instance.groups.expand((group) => group.nodes)) {
-        if (node.address == proxy.host && node.port == proxy.port) {
+        if (node.address == proxyHost && node.port == proxyPort) {
           matchingNode = node;
           break;
         }
@@ -112,8 +114,8 @@ class _ProxyPinBrowserPageState extends State<ProxyPinBrowserPage> {
     }
     final label = matchingNode != null
         ? '${matchingNode.name} · ${matchingNode.latencyMs != null && matchingNode.latencyMs! >= 0 ? '${matchingNode.latencyMs} ms' : '${matchingNode.address}:${matchingNode.port}'}'
-        : proxy?.host != null && proxy?.port != null
-            ? '${proxy!.host}:${proxy.port}'
+        : proxyHost != null && proxyPort != null
+            ? '$proxyHost:$proxyPort'
             : '代理未连接';
     if (!mounted) return;
     if (_vpnRunning != running || _proxyLabel != label) {
