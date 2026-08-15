@@ -51,3 +51,8 @@ app.*.map.json
 l10n_errors.txt
 pubspec.lock
 /dist/
+
+# Android release signing secrets
+android/*.jks
+android/*.keystore
+android/key.properties

@@ -82,8 +82,8 @@ android {
 
     buildTypes {
         release {
-            // Use the release key when configured; fall back to the debug key for CI builds without key.properties.
-            signingConfig keystorePropertiesFile.exists() ? signingConfigs.release : signingConfigs.debug
+            // All release APKs use the unified yangyu91 signing identity.
+            signingConfig signingConfigs.release
 
             minifyEnabled true
             shrinkResources true
