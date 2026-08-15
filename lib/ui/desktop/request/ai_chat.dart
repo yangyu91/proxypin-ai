@@ -7,6 +7,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:proxypin_ai/ai/ai_config.dart';
 import 'package:proxypin_ai/ai/builtin_skills.dart';
+import 'package:proxypin_ai/ai/ai_conversation_store.dart';
 import 'package:proxypin_ai/ai/ai_provider.dart';
 import 'package:proxypin_ai/ai/login_webview.dart';
 import 'package:proxypin_ai/network/http/http.dart';
@@ -76,6 +77,8 @@ class _AiChatPanelState extends State<AiChatPanel> {
   final List<ChatEntry> _entries = [];
   final TextEditingController _inputController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
+  final AiConversationStore _conversationStore = AiConversationStore.instance;
+  AiConversation? _conversation;
 
   AiProvider? _provider;
   AiProviderType _providerType = AiProviderType.deepSeekWeb;
@@ -98,6 +101,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
   }
 
   Future<void> _loadConfig() async {
+    await _conversationStore.load();
     final type = await AiConfig.readProviderType();
     final token = await AiConfig.readToken();
     final apiKey = await AiConfig.readApiKey();
@@ -120,7 +124,11 @@ class _AiChatPanelState extends State<AiChatPanel> {
       _memory = memory;
       _includeSensitive = includeSensitive;
       _confirmActions = confirmActions;
-      _configured = type == AiProviderType.deepSeekWeb ? _token.isNotEmpty : _apiKey.isNotEmpty;
+      _configured = type == AiProviderType.deepSeekWeb || type == AiProviderType.doubaoWeb ? _token.isNotEmpty : _apiKey.isNotEmpty;
+      _conversation = _conversationStore.active ?? _conversationStore.create(provider: type);
+      _entries
+        ..clear()
+        ..addAll(_conversation!.messages.map((message) => ChatEntry(role: message.role, content: message.content)));
     });
     if (_configured) {
       _buildProvider();
@@ -134,7 +142,9 @@ class _AiChatPanelState extends State<AiChatPanel> {
 
   Future<void> _send() async {
     final prompt = _inputController.text.trim();
-    if (prompt.isEmpty || _sending) return;
+    if (prompt.isEmpty || _sending || _provider == null) return;
+    _conversation ??= _conversationStore.create(provider: _providerType);
+    final conversationId = _conversation!.id;
 
     _inputController.clear();
 
@@ -143,6 +153,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
     final skillsText = '\n\n内置调试 Skill：\n${BuiltinSkills.all.join('\n\n')}\n\n用户 Skill：\n${_skills.map((skill) => '- $skill').join('\n')}';
     final memoryText = _memory.isEmpty ? '' : '\n\n长期记忆：\n${_memory.take(12).map((entry) => '${entry['role']}: ${entry['content']}').join('\n')}';
 
+    await _conversationStore.append(conversationId, AiMessage(role: 'user', content: prompt));
     setState(() {
       _entries.add(ChatEntry(role: 'user', content: prompt));
       _entries.add(ChatEntry(role: 'assistant', content: '', reasoning: ''));
@@ -175,6 +186,8 @@ class _AiChatPanelState extends State<AiChatPanel> {
             if (answer.isNotEmpty) {
               _memory = [..._memory, {'role': 'user', 'content': prompt}, {'role': 'assistant', 'content': answer}].skip(_memory.length > 18 ? 2 : 0).toList();
               AiConfig.saveMemory(_memory);
+              _conversationStore.append(conversationId, AiMessage(role: 'assistant', content: answer));
+              _conversationStore.saveMemory(conversationId, _memory);
             }
             setState(() => _sending = false);
           },
@@ -202,6 +215,92 @@ class _AiChatPanelState extends State<AiChatPanel> {
     });
   }
 
+  Future<void> _openConversationHistory() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (sheetContext, setSheetState) => SafeArea(
+          child: SizedBox(
+            height: MediaQuery.sizeOf(context).height * .72,
+            child: Column(children: [
+              ListTile(
+                title: const Text('对话记录'),
+                subtitle: Text('${_conversationStore.conversations.length} 个会话 · 本地保存'),
+                trailing: Wrap(children: [
+                  IconButton(tooltip: '新建对话', icon: const Icon(Icons.add), onPressed: () {
+                    _conversation = _conversationStore.create(provider: _providerType);
+                    _entries.clear();
+                    setState(() {});
+                    setSheetState(() {});
+                  }),
+                  IconButton(tooltip: '清空记录', icon: const Icon(Icons.delete_sweep_outlined), onPressed: () async {
+                    await _conversationStore.clear();
+                    _conversation = _conversationStore.create(provider: _providerType);
+                    _entries.clear();
+                    setState(() {});
+                    setSheetState(() {});
+                  }),
+                ]),
+              ),
+              const Divider(height: 1),
+              Expanded(
+                child: ListView.builder(
+                  itemCount: _conversationStore.conversations.length,
+                  itemBuilder: (_, index) {
+                    final item = _conversationStore.conversations[index];
+                    return ListTile(
+                      selected: item.id == _conversation?.id,
+                      leading: Icon(item.id == _conversation?.id ? Icons.chat : Icons.chat_bubble_outline),
+                      title: Text(item.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                      subtitle: Text('${item.provider} · ${item.messages.length} 条消息'),
+                      trailing: IconButton(icon: const Icon(Icons.delete_outline), onPressed: () async {
+                        await _conversationStore.remove(item.id);
+                        if (item.id == _conversation?.id) {
+                          _conversation = _conversationStore.active ?? _conversationStore.create(provider: _providerType);
+                          _entries
+                            ..clear()
+                            ..addAll(_conversation!.messages.map((message) => ChatEntry(role: message.role, content: message.content)));
+                          setState(() {});
+                        }
+                        setSheetState(() {});
+                      }),
+                      onTap: () {
+                        _conversationStore.select(item.id);
+                        _conversation = item;
+                        _entries
+                          ..clear()
+                          ..addAll(item.messages.map((message) => ChatEntry(role: message.role, content: message.content)));
+                        setState(() {});
+                        Navigator.pop(sheetContext);
+                      },
+                    );
+                  },
+                ),
+              ),
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openDoubaoLogin() async {
+    final cookie = await Navigator.of(context).push<String>(MaterialPageRoute(builder: (_) => DoubaoLoginPage(onCookie: (value) => Navigator.of(context).pop(value))));
+    if (cookie != null && cookie.trim().isNotEmpty) {
+      await AiConfig.saveToken(cookie.trim());
+      await AiConfig.saveProviderType(AiProviderType.doubaoWeb);
+      if (!mounted) return;
+      setState(() {
+        _token = cookie.trim();
+        _providerType = AiProviderType.doubaoWeb;
+        _configured = true;
+      });
+      _buildProvider();
+    }
+  }
+
   Future<void> _openLogin() async {
     final token = await Navigator.of(context).push<String>(
       MaterialPageRoute(builder: (_) => DeepSeekLoginPage(onToken: (token) {
@@ -224,6 +323,8 @@ class _AiChatPanelState extends State<AiChatPanel> {
     switch (type) {
       case AiProviderType.deepSeekWeb:
         return 'DeepSeek 网页版';
+      case AiProviderType.doubaoWeb:
+        return '豆包网页版（免费）';
       case AiProviderType.deepSeekOfficial:
         return 'DeepSeek 官方 API';
       case AiProviderType.openAiCompatible:
@@ -312,7 +413,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
                   _skills = skills;
                   _includeSensitive = includeSensitive;
                   _confirmActions = confirmActions;
-                  _configured = provider == AiProviderType.deepSeekWeb ? _token.isNotEmpty : key.isNotEmpty;
+                  _configured = provider == AiProviderType.deepSeekWeb || provider == AiProviderType.doubaoWeb ? _token.isNotEmpty : key.isNotEmpty;
                 });
                 if (_configured) _buildProvider();
                 if (ctx.mounted) Navigator.pop(ctx);
@@ -391,6 +492,11 @@ class _AiChatPanelState extends State<AiChatPanel> {
             child: Icon(Icons.auto_awesome_rounded, size: 19, color: scheme.onPrimaryContainer),
           ),
           const SizedBox(width: 10),
+          IconButton(
+            tooltip: '对话记录',
+            icon: const Icon(Icons.history_rounded, size: 20),
+            onPressed: _openConversationHistory,
+          ),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -444,8 +550,8 @@ class _AiChatPanelState extends State<AiChatPanel> {
                 width: double.infinity,
                 child: FilledButton.icon(
                   icon: const Icon(Icons.login_rounded, size: 18),
-                  label: const Text('登录 DeepSeek 网页版'),
-                  onPressed: _openLogin,
+                  label: Text(_providerType == AiProviderType.doubaoWeb ? '登录豆包网页版' : '登录 DeepSeek 网页版'),
+                  onPressed: _providerType == AiProviderType.doubaoWeb ? _openDoubaoLogin : _openLogin,
                 ),
               ),
               const SizedBox(height: 8),

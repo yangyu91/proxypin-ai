@@ -96,3 +96,40 @@ class _DeepSeekLoginPageState extends State<DeepSeekLoginPage> {
     );
   }
 }
+
+/// 豆包网页版登录页。网页协议和 Cookie 可能变化，登录态只保存在本机。
+class DoubaoLoginPage extends StatefulWidget {
+  final ValueChanged<String> onCookie;
+  const DoubaoLoginPage({super.key, required this.onCookie});
+  @override
+  State<DoubaoLoginPage> createState() => _DoubaoLoginPageState();
+}
+
+class _DoubaoLoginPageState extends State<DoubaoLoginPage> {
+  WebViewController? _controller;
+  bool _loading = true;
+  @override
+  void initState() {
+    super.initState();
+    _controller = WebViewController()
+      ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..addJavaScriptChannel('CookieExtractor', onMessageReceived: (message) {
+        if (message.message.trim().isNotEmpty) widget.onCookie(message.message.trim());
+      })
+      ..setNavigationDelegate(NavigationDelegate(onPageFinished: (_) {
+        if (mounted) setState(() => _loading = false);
+        _extractCookie();
+      }))
+      ..loadRequest(Uri.parse('https://www.doubao.com/chat/'));
+  }
+
+  Future<void> _extractCookie() async {
+    await _controller?.runJavaScript("CookieExtractor.postMessage(document.cookie || '')");
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+        appBar: AppBar(title: const Text('登录豆包网页版'), actions: [TextButton(onPressed: _extractCookie, child: const Text('读取登录态'))]),
+        body: Stack(children: [if (_controller != null) WebViewWidget(controller: _controller!), if (_loading) const Center(child: CircularProgressIndicator())]),
+      );
+}
