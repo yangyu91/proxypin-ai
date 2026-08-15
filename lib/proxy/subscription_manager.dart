@@ -104,6 +104,11 @@ class SubscriptionManager {
     return ProxyNode(id: id, name: name, scheme: scheme, address: host, port: port, settings: {'raw': value, 'userInfo': uri.userInfo, 'query': uri.queryParameters}, enabled: true);
   }
 
+  Future<List<int?>> testGroup(ProxyGroup group, {Duration timeout = const Duration(seconds: 5)}) async {
+    // 导入后默认对整组节点并发 TCP 探测；这里测的是节点端口可达性，不等同于完整代理协议握手。
+    return Future.wait(group.nodes.map((node) => testLatency(node, timeout: timeout)));
+  }
+
   Future<int?> testLatency(ProxyNode node, {Duration timeout = const Duration(seconds: 5)}) async {
     final stopwatch = Stopwatch()..start();
     try {

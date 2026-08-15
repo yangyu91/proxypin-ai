@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import 'package:proxypin_ai/proxy/subscription_manager.dart';
 import 'package:proxypin_ai/network/bin/configuration.dart';
-import 'package:proxypin_ai/network/channel/host_port.dart';
 
 class ProxySubscriptionsPage extends StatefulWidget {
   final Configuration? configuration;
@@ -34,9 +33,13 @@ class _ProxySubscriptionsPageState extends State<ProxySubscriptionsPage> {
     if (url.isEmpty) return;
     setState(() { _loading = true; _error = null; });
     try {
-      await _manager.importSubscription(url, name: _nameController.text.trim());
+      final group = await _manager.importSubscription(url, name: _nameController.text.trim());
       _urlController.clear();
       _nameController.clear();
+      if (mounted) setState(() {});
+      // 默认对新导入分组的全部节点测速，结果会持久化并实时刷新。
+      await _manager.testGroup(group);
+      if (mounted) setState(() {});
     } catch (error) {
       _error = '导入失败：$error';
     } finally {
@@ -51,13 +54,17 @@ class _ProxySubscriptionsPageState extends State<ProxySubscriptionsPage> {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('该节点需要 Xray/V2Ray 核心，当前版本暂不能直接连接 vmess/vless/trojan')));
       return;
     }
+    final userInfo = node.settings['userInfo']?.toString() ?? '';
+    final auth = userInfo.isEmpty ? const <String>[] : userInfo.split(':');
     configuration.externalProxy = ProxyInfo()
       ..enabled = true
       ..capturePacket = true
       ..host = node.address
-      ..port = node.port;
+      ..port = node.port
+      ..username = auth.isNotEmpty ? Uri.decodeComponent(auth.first) : null
+      ..password = auth.length > 1 ? Uri.decodeComponent(auth.sublist(1).join(':')) : null;
     await configuration.flushConfig();
-    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('已连接：${node.name}')));
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('已连接 HTTP 代理节点：${node.name}；HTTPS 抓包将通过该节点转发')));
   }
 
   Future<void> _test(ProxyNode node) async {
