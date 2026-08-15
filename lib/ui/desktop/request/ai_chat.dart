@@ -234,20 +234,43 @@ class _AiChatPanelState extends State<AiChatPanel> {
   }
 
   Widget _buildHeader() {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final providerName = _providerType == AiProviderType.deepSeekWeb ? 'DeepSeek 网页版' : 'DeepSeek 官方 API';
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: const EdgeInsets.fromLTRB(16, 12, 10, 10),
+      decoration: BoxDecoration(
+        color: scheme.surface,
+        border: Border(bottom: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.45))),
+      ),
       child: Row(
         children: [
-          const Icon(Icons.auto_awesome, size: 18),
-          const SizedBox(width: 6),
-          const Expanded(child: Text('AI 分析', style: TextStyle(fontWeight: FontWeight.bold))),
-          if (_configured)
-            Text(
-              _providerType == AiProviderType.deepSeekWeb ? 'DeepSeek 网页版' : 'DeepSeek 官方 API',
-              style: const TextStyle(fontSize: 12),
+          Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              color: scheme.primaryContainer,
+              borderRadius: BorderRadius.circular(11),
             ),
+            child: Icon(Icons.auto_awesome_rounded, size: 19, color: scheme.onPrimaryContainer),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('AI 分析', style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
+                const SizedBox(height: 2),
+                Text(
+                  _configured ? providerName : '未配置 AI 服务',
+                  style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                ),
+              ],
+            ),
+          ),
           IconButton(
-            icon: const Icon(Icons.settings, size: 18),
+            tooltip: 'AI 设置',
+            icon: const Icon(Icons.tune_rounded, size: 20),
             onPressed: _openSettings,
           ),
         ],
@@ -256,86 +279,174 @@ class _AiChatPanelState extends State<AiChatPanel> {
   }
 
   Widget _buildLoginPrompt() {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
     return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const Text('未登录 DeepSeek'),
-          const SizedBox(height: 12),
-          ElevatedButton.icon(
-            icon: const Icon(Icons.login),
-            label: const Text('登录 chat.deepseek.com'),
-            onPressed: _openLogin,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 28),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(22, 24, 22, 20),
+          decoration: BoxDecoration(
+            color: scheme.surfaceContainerHighest.withValues(alpha: 0.55),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.55)),
           ),
-          const SizedBox(height: 8),
-          TextButton(
-            onPressed: _openSettings,
-            child: const Text('或使用官方 API Key'),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.lock_outline_rounded, size: 32, color: scheme.primary),
+              const SizedBox(height: 12),
+              Text('开始使用 AI 分析', style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
+              const SizedBox(height: 7),
+              Text(
+                '登录 DeepSeek，或配置官方 API Key，即可让 AI 读取当前抓包数据。',
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant, height: 1.45),
+              ),
+              const SizedBox(height: 18),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  icon: const Icon(Icons.login_rounded, size: 18),
+                  label: const Text('登录 DeepSeek 网页版'),
+                  onPressed: _openLogin,
+                ),
+              ),
+              const SizedBox(height: 8),
+              TextButton.icon(
+                onPressed: _openSettings,
+                icon: const Icon(Icons.key_rounded, size: 17),
+                label: const Text('使用官方 API Key'),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
 
   Widget _buildEntry(ChatEntry entry) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
     final isUser = entry.role == 'user';
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(isUser ? Icons.person : Icons.auto_awesome, size: 16),
-          const SizedBox(width: 6),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (entry.reasoning.isNotEmpty)
-                  Container(
-                    margin: const EdgeInsets.only(bottom: 6),
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: Colors.grey.withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: Text(
-                      entry.reasoning,
-                      style: const TextStyle(fontSize: 12, color: Colors.grey),
-                    ),
-                  ),
-                SelectableText(entry.content.isEmpty ? '思考中...' : entry.content),
-              ],
-            ),
+    final content = entry.content.isEmpty ? '思考中…' : entry.content;
+    return Align(
+      alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
+      child: Container(
+        constraints: BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width * (isUser ? .82 : .94)),
+        margin: EdgeInsets.fromLTRB(isUser ? 46 : 14, 7, isUser ? 14 : 46, 7),
+        padding: const EdgeInsets.fromLTRB(14, 11, 14, 11),
+        decoration: BoxDecoration(
+          color: isUser ? scheme.primaryContainer : scheme.surfaceContainerHighest.withValues(alpha: .72),
+          borderRadius: BorderRadius.only(
+            topLeft: const Radius.circular(16),
+            topRight: const Radius.circular(16),
+            bottomLeft: Radius.circular(isUser ? 16 : 4),
+            bottomRight: Radius.circular(isUser ? 4 : 16),
           ),
-        ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (!isUser)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 5),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.auto_awesome_rounded, size: 15, color: scheme.primary),
+                    const SizedBox(width: 5),
+                    Text('AI 分析', style: theme.textTheme.labelMedium?.copyWith(color: scheme.primary, fontWeight: FontWeight.w700)),
+                  ],
+                ),
+              ),
+            if (entry.reasoning.isNotEmpty)
+              Theme(
+                data: theme.copyWith(dividerColor: Colors.transparent),
+                child: ExpansionTile(
+                  tilePadding: EdgeInsets.zero,
+                  childrenPadding: const EdgeInsets.only(bottom: 6),
+                  dense: true,
+                  title: Text('思考过程', style: theme.textTheme.labelSmall),
+                  children: [SelectableText(entry.reasoning, style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant, height: 1.4))],
+                ),
+              ),
+            _buildFormattedText(content, theme.textTheme.bodyMedium),
+          ],
+        ),
       ),
     );
   }
 
+  Widget _buildFormattedText(String text, TextStyle? baseStyle) {
+    final style = baseStyle ?? const TextStyle(fontSize: 14);
+    final spans = <TextSpan>[];
+    for (final line in text.split('\n')) {
+      final trimmed = line.trimLeft();
+      if (trimmed.startsWith('#')) {
+        final heading = trimmed.replaceFirst(RegExp(r'^#+\s*'), '');
+        spans.add(TextSpan(text: '$heading\n', style: style.copyWith(fontWeight: FontWeight.w700, fontSize: (style.fontSize ?? 14) + 1)));
+      } else if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
+        spans.add(TextSpan(text: '• ', style: style.copyWith(fontWeight: FontWeight.w700)));
+        spans.addAll(_inlineSpans(trimmed.substring(2), style));
+        spans.add(const TextSpan(text: '\n'));
+      } else {
+        spans.addAll(_inlineSpans(line, style));
+        spans.add(const TextSpan(text: '\n'));
+      }
+    }
+    return SelectableText.rich(TextSpan(style: style.copyWith(height: 1.45), children: spans));
+  }
+
+  List<InlineSpan> _inlineSpans(String text, TextStyle style) {
+    final spans = <InlineSpan>[];
+    final pattern = RegExp(r'(\*\*|__)(.+?)\1');
+    var cursor = 0;
+    for (final match in pattern.allMatches(text)) {
+      if (match.start > cursor) spans.add(TextSpan(text: text.substring(cursor, match.start)));
+      spans.add(TextSpan(text: match.group(2), style: style.copyWith(fontWeight: FontWeight.w700)));
+      cursor = match.end;
+    }
+    if (cursor < text.length) spans.add(TextSpan(text: text.substring(cursor)));
+    return spans;
+  }
+
   Widget _buildInput() {
-    return Container(
-      padding: const EdgeInsets.all(8),
-      child: Row(
-        children: [
-          Expanded(
-            child: TextField(
-              controller: _inputController,
-              minLines: 1,
-              maxLines: 4,
-              decoration: const InputDecoration(
-                hintText: '输入问题，AI 将分析抓包数据...',
-                border: OutlineInputBorder(),
-                isDense: true,
+    final scheme = Theme.of(context).colorScheme;
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _inputController,
+                minLines: 1,
+                maxLines: 4,
+                textInputAction: TextInputAction.send,
+                decoration: InputDecoration(
+                  hintText: '问问 AI 当前抓包情况…',
+                  filled: true,
+                  fillColor: scheme.surfaceContainerHighest.withValues(alpha: .55),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(18), borderSide: BorderSide.none),
+                  enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(18), borderSide: BorderSide(color: scheme.outlineVariant.withValues(alpha: .5))),
+                  focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(18), borderSide: BorderSide(color: scheme.primary, width: 1.4)),
+                ),
+                onSubmitted: (_) => _send(),
               ),
-              onSubmitted: (_) => _send(),
             ),
-          ),
-          const SizedBox(width: 8),
-          IconButton(
-            icon: _sending ? const CircularProgressIndicator(strokeWidth: 2) : const Icon(Icons.send),
-            onPressed: _sending ? null : _send,
-          ),
-        ],
+            const SizedBox(width: 8),
+            IconButton.filled(
+              tooltip: '发送',
+              style: IconButton.styleFrom(backgroundColor: scheme.primary, foregroundColor: scheme.onPrimary, minimumSize: const Size(46, 46)),
+              icon: _sending ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.arrow_upward_rounded),
+              onPressed: _sending ? null : _send,
+            ),
+          ],
+        ),
       ),
     );
   }
