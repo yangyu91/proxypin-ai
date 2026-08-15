@@ -7,7 +7,8 @@ import 'package:proxypin_ai/network/vpn/android_vpn.dart';
 
 class ProxySubscriptionsPage extends StatefulWidget {
   final Configuration? configuration;
-  const ProxySubscriptionsPage({super.key, this.configuration});
+  final bool autoConnectFastest;
+  const ProxySubscriptionsPage({super.key, this.configuration, this.autoConnectFastest = false});
   @override
   State<ProxySubscriptionsPage> createState() => _ProxySubscriptionsPageState();
 }
@@ -30,6 +31,24 @@ class _ProxySubscriptionsPageState extends State<ProxySubscriptionsPage> {
     await _manager.load();
     _vpnRunning = await AndroidVpnController.isRunning();
     if (mounted) setState(() => _loading = false);
+    if (widget.autoConnectFastest) await _autoConnectFastest();
+  }
+
+  Future<void> _autoConnectFastest() async {
+    final nodes = _manager.groups.expand((group) => group.nodes).where((node) => node.enabled && ['http', 'socks', 'socks5'].contains(node.scheme)).toList();
+    if (nodes.isEmpty) return;
+    var candidates = nodes.where((node) => node.latencyMs != null && node.latencyMs! >= 0).toList();
+    if (candidates.isEmpty) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('正在测速可用代理节点…')));
+      await Future.wait(nodes.map((node) => _manager.testLatency(node, timeout: const Duration(seconds: 3))));
+      candidates = nodes.where((node) => node.latencyMs != null && node.latencyMs! >= 0).toList();
+    }
+    if (candidates.isEmpty) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('没有检测到可用的 HTTP/SOCKS 节点')));
+      return;
+    }
+    candidates.sort((a, b) => a.latencyMs!.compareTo(b.latencyMs!));
+    await _connect(candidates.first);
   }
 
   Future<void> _import() async {
