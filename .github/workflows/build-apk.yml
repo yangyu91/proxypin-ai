@@ -1,0 +1,49 @@
+name: Build APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: proxypin-android-apk
+          path: build/app/outputs/flutter-apk/*.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload ProGuard mapping when available
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: proxypin-android-mapping
+          path: build/app/outputs/mapping/release/mapping.txt
+          if-no-files-found: ignore
+          retention-days: 14
+
+concurrency:
+  group: apk-build-${{ github.ref }}
+  cancel-in-progress: true
