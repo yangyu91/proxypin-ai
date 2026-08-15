@@ -3,6 +3,7 @@ import 'package:proxypin_ai/network/channel/host_port.dart';
 
 import 'package:proxypin_ai/proxy/subscription_manager.dart';
 import 'package:proxypin_ai/network/bin/configuration.dart';
+import 'package:proxypin_ai/network/vpn/android_vpn.dart';
 
 class ProxySubscriptionsPage extends StatefulWidget {
   final Configuration? configuration;
@@ -16,6 +17,7 @@ class _ProxySubscriptionsPageState extends State<ProxySubscriptionsPage> {
   final _nameController = TextEditingController();
   final _manager = SubscriptionManager.instance;
   bool _loading = true;
+  bool _vpnRunning = false;
   String? _error;
 
   @override
@@ -26,6 +28,7 @@ class _ProxySubscriptionsPageState extends State<ProxySubscriptionsPage> {
 
   Future<void> _load() async {
     await _manager.load();
+    _vpnRunning = await AndroidVpnController.isRunning();
     if (mounted) setState(() => _loading = false);
   }
 
@@ -65,7 +68,25 @@ class _ProxySubscriptionsPageState extends State<ProxySubscriptionsPage> {
       ..username = auth.isNotEmpty ? Uri.decodeComponent(auth.first) : null
       ..password = auth.length > 1 ? Uri.decodeComponent(auth.sublist(1).join(':')) : null;
     await configuration.flushConfig();
-    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('已连接 HTTP 代理节点：${node.name}；HTTPS 抓包将通过该节点转发')));
+    try {
+      final vpnProxy = ProxyInfo.of(node.address, node.port)
+        ..enabled = true
+        ..capturePacket = true;
+      final prepared = await AndroidVpnController.start(vpnProxy);
+      await Future<void>.delayed(const Duration(milliseconds: 900));
+      final running = prepared || await AndroidVpnController.isRunning();
+      if (mounted) {
+        setState(() => _vpnRunning = running);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(running ? 'VPN 已连接：${node.name}；系统状态栏应显示 VPN 图标' : '已请求 VPN 权限，请在系统弹窗中允许后重试')));
+      }
+    } catch (error) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('VPN 启动失败：$error')));
+    }
+  }
+
+  Future<void> _disconnectVpn() async {
+    await AndroidVpnController.stop();
+    if (mounted) setState(() => _vpnRunning = false);
   }
 
   Future<void> _test(ProxyNode node) async {
@@ -97,6 +118,14 @@ class _ProxySubscriptionsPageState extends State<ProxySubscriptionsPage> {
                   ),
                 ),
                 const SizedBox(height: 8),
+                Card(
+                  child: ListTile(
+                    leading: Icon(_vpnRunning ? Icons.vpn_lock : Icons.vpn_key_off, color: _vpnRunning ? Colors.green : null),
+                    title: Text(_vpnRunning ? 'VPN 已连接' : 'VPN 未连接'),
+                    subtitle: Text(_vpnRunning ? '系统状态栏应显示 VPN 图标，浏览器和应用流量会进入 VPN' : '连接节点后会申请 Android VPN 权限'),
+                    trailing: _vpnRunning ? TextButton(onPressed: _disconnectVpn, child: const Text('断开')) : null,
+                  ),
+                ),
                 ..._manager.groups.map((group) => Card(
                   child: ExpansionTile(
                     title: Text(group.name),

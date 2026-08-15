@@ -1,5 +1,7 @@
 package com.network.proxy.plugin
 
+import android.os.Build
+import androidx.core.content.ContextCompat
 import com.network.proxy.ProxyVpnService
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.MethodChannel
@@ -86,7 +88,11 @@ class VpnServicePlugin : AndroidFlutterPlugin() {
             setSystemProxy,
             proxyPassDomains
         )
-        activity.startService(intent)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            ContextCompat.startForegroundService(activity, intent)
+        } else {
+            activity.startService(intent)
+        }
     }
 
     /**

@@ -366,9 +366,9 @@ class ProxyVpnService : VpnService(), ProtectSocket {
                 .setOngoing(true)
                 .build()
 
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(NOTIFICATION_ID, notification)
-        }
+        // VpnService 在 Android 8+ 必须尽快进入前台；Android 14+ 也不能跳过，
+        // 否则服务可能被系统回收，用户看不到稳定的 VPN 状态。
+        startForeground(NOTIFICATION_ID, notification)
     }
 
 

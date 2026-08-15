@@ -2,6 +2,8 @@ package com.network.proxy
 
 import android.content.Intent
 import android.content.res.Configuration
+import android.os.Build
+import androidx.core.content.ContextCompat
 import com.network.proxy.plugin.AppLifecyclePlugin
 import com.network.proxy.plugin.InstalledAppsPlugin
 import com.network.proxy.plugin.PictureInPicturePlugin
@@ -46,7 +48,12 @@ class MainActivity : FlutterActivity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         if (requestCode == VpnServicePlugin.REQUEST_CODE) {
             if (resultCode == RESULT_OK) {
-                activity.startService(ProxyVpnService.startVpnIntent(activity))
+                val intent = ProxyVpnService.startVpnIntent(activity)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    ContextCompat.startForegroundService(activity, intent)
+                } else {
+                    activity.startService(intent)
+                }
                 return
             }
 
