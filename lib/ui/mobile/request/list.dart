@@ -28,6 +28,7 @@ import 'package:proxypin_ai/utils/export_request.dart';
 import 'package:proxypin_ai/utils/listenable_list.dart';
 
 import '../../component/model/search_model.dart';
+import '../../desktop/request/ai_chat.dart';
 
 /// 请求列表
 /// @author wanghongen
@@ -85,7 +86,14 @@ class RequestListState extends State<RequestListWidget> {
         child: Scaffold(
           appBar: AppBar(
               title: TabBar(tabs: tabs, onTap: (index) => tabClickHandles[index].call()),
-              automaticallyImplyLeading: false),
+              automaticallyImplyLeading: false,
+              actions: [
+                IconButton(
+                  icon: const Icon(Icons.auto_awesome_outlined),
+                  tooltip: 'AI 分析',
+                  onPressed: openAiChat,
+                ),
+              ]),
           body: TabBarView(
             children: [
               RequestSequence(
@@ -107,6 +115,20 @@ class RequestListState extends State<RequestListWidget> {
             ],
           ),
         ));
+  }
+
+  void openAiChat() {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (_) => SizedBox(
+        height: MediaQuery.of(context).size.height * 0.92,
+        child: AiChatPanel(
+          requestsProvider: () => container.toList(),
+        ),
+      ),
+    );
   }
 
   ///添加请求
