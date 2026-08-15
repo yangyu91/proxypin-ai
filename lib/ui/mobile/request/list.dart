@@ -138,6 +138,19 @@ class RequestListState extends State<RequestListWidget> {
     domainListKey.currentState?.add(request);
   }
 
+  /// 添加内置浏览器导航记录。浏览器请求没有 Dart Channel，直接复用共享容器并刷新两个视图。
+  void addBrowser(HttpRequest request) {
+    container.add(request);
+    requestSequenceKey.currentState?.add(request);
+    domainListKey.currentState?.add(request);
+  }
+
+  /// 同步内置浏览器的加载结果。
+  void addBrowserResponse(HttpResponse response) {
+    requestSequenceKey.currentState?.addResponse(response);
+    domainListKey.currentState?.addResponse(response);
+  }
+
   ///添加响应
   void addResponse(ChannelContext channelContext, HttpResponse response) {
     requestSequenceKey.currentState?.addResponse(response);

@@ -15,8 +15,10 @@ import 'package:proxypin_ai/ui/mobile/setting/proxy_subscriptions.dart';
 /// ProxyPin 内置浏览器，浏览器请求可复用当前抓包/VPN 网络链路。
 class ProxyPinBrowserPage extends StatefulWidget {
   final List<HttpRequest> Function() requestsProvider;
+  final void Function(HttpRequest request)? onCapturedRequest;
+  final void Function(HttpResponse response)? onCapturedResponse;
 
-  const ProxyPinBrowserPage({super.key, required this.requestsProvider});
+  const ProxyPinBrowserPage({super.key, required this.requestsProvider, this.onCapturedRequest, this.onCapturedResponse});
 
   @override
   State<ProxyPinBrowserPage> createState() => _ProxyPinBrowserPageState();
@@ -34,6 +36,7 @@ class _ProxyPinBrowserPageState extends State<ProxyPinBrowserPage> {
   int _progress = 0;
   String _title = '浏览器';
   String _proxyLabel = '代理未连接';
+  HttpRequest? _activeBrowserRequest;
 
   @override
   void initState() {
@@ -47,13 +50,21 @@ class _ProxyPinBrowserPageState extends State<ProxyPinBrowserPage> {
             _progress = progress;
             _loading = progress < 100;
           }),
-          onPageStarted: (url) => setState(() {
-            _loading = true;
-            _addressController.text = url;
-            if (_tabs.isEmpty) _tabs.add(url);
-            _tabs[_tabs.length - 1] = url;
-            AiWorkspace.instance.setBrowserPage(url: url);
-          }),
+          onPageStarted: (url) {
+            final request = HttpRequest(HttpMethod.get, url);
+            request.attributes['source'] = 'builtin_browser';
+            request.attributes['captureMode'] = 'webview_navigation';
+            request.headers.set('User-Agent', 'ProxyPin-BuiltInBrowser');
+            _activeBrowserRequest = request;
+            widget.onCapturedRequest?.call(request);
+            setState(() {
+              _loading = true;
+              _addressController.text = url;
+              if (_tabs.isEmpty) _tabs.add(url);
+              _tabs[_tabs.length - 1] = url;
+              AiWorkspace.instance.setBrowserPage(url: url);
+            });
+          },
           onPageFinished: (url) async {
             final pageTitle = await _controller.getTitle();
             if (!mounted) return;
@@ -61,6 +72,13 @@ class _ProxyPinBrowserPageState extends State<ProxyPinBrowserPage> {
               _loading = false;
               _addressController.text = url;
               _title = pageTitle?.trim().isNotEmpty == true ? pageTitle!.trim() : '浏览器';
+              if (_activeBrowserRequest?.requestUrl == url) {
+                final response = HttpResponse(HttpStatus.ok);
+                response.request = _activeBrowserRequest;
+                response.responseTime = DateTime.now();
+                _activeBrowserRequest!.response = response;
+                widget.onCapturedResponse?.call(response);
+              }
               AiWorkspace.instance.setBrowserPage(url: url, title: _title);
             });
           },

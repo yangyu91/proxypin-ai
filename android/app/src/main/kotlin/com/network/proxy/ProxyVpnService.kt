@@ -399,7 +399,9 @@ class ProxyVpnService : VpnService(), ProtectSocket {
                 build.addAllowedApplication(it)
             }
         } else {
-            build.addDisallowedApplication(baseContext.packageName)
+            // 不排除 ProxyPin 自身：内置 WebView 属于同一应用进程，必须进入 VPN
+            // 隧道才能被代理链路处理。VPN 转发线程的出站 socket 会通过 protect()
+            // 绕过自身 VPN，避免形成回环。
         }
 
         disallowApps?.forEach {

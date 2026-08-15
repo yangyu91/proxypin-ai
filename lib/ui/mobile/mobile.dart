@@ -204,7 +204,18 @@ class MobileHomeState extends State<MobileHomePage> implements EventListener, Li
     var navigationView = [
       NavigatorPage(
         navigatorKey: browserNavigatorKey,
-        child: ProxyPinBrowserPage(requestsProvider: () => MobileApp.container.toList()),
+        child: ProxyPinBrowserPage(
+          requestsProvider: () => MobileApp.container.toList(),
+          onCapturedRequest: (request) {
+            final state = MobileApp.requestStateKey.currentState;
+            if (state != null) {
+              state.addBrowser(request);
+            } else {
+              MobileApp.container.add(request);
+            }
+          },
+          onCapturedResponse: (response) => MobileApp.requestStateKey.currentState?.addBrowserResponse(response),
+        ),
       ),
       NavigatorPage(
         navigatorKey: requestPageNavigatorKey,
