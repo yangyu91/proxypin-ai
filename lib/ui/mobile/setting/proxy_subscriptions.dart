@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:proxy_manager/proxy_manager.dart';
 
 import 'package:proxypin_ai/proxy/subscription_manager.dart';
 import 'package:proxypin_ai/network/bin/configuration.dart';
