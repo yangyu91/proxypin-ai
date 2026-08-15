@@ -12,6 +12,8 @@ import 'package:proxypin_ai/ai/ai_workspace.dart';
 import 'package:proxypin_ai/ai/ai_provider.dart';
 import 'package:proxypin_ai/ai/login_webview.dart';
 import 'package:proxypin_ai/network/http/http.dart';
+import 'package:proxypin_ai/network/http/http_client.dart';
+import 'package:proxypin_ai/network/bin/server.dart';
 
 /// 把抓包数据序列化成 AI 可分析的文本。
 String buildCaptureContext(List<HttpRequest> requests, {int maxBodyLength = 300, HttpRequest? currentRequest, bool includeSensitive = false}) {
@@ -435,6 +437,35 @@ class _AiChatPanelState extends State<AiChatPanel> {
     skillsController.dispose();
   }
 
+  Future<void> _replayCurrentRequest() async {
+    final source = widget.currentRequest;
+    if (source == null || _sending) return;
+    final replay = source.copy(uri: source.requestUrl);
+    replay.attributes['aiReplay'] = true;
+    replay.attributes['aiReplaySource'] = source.requestId;
+    final server = ProxyServer.current;
+    if (server == null || !server.isRunning) {
+      setState(() => _entries.add(ChatEntry(role: 'assistant', content: '无法重放：请先启动 ProxyPin 抓包服务，才能让请求和响应进入抓包记录。')));
+      return;
+    }
+    final proxyInfo = ProxyInfo.of('127.0.0.1', server.port);
+    setState(() {
+      _entries.add(ChatEntry(role: 'assistant', content: '正在通过 ProxyPin 重放当前请求，结果会回流到抓包列表…'));
+    });
+    try {
+      final response = await HttpClients.proxyRequest(replay, proxyInfo: proxyInfo);
+      if (!mounted) return;
+      setState(() {
+        _entries.add(ChatEntry(role: 'assistant', content: 'AI 重放完成：HTTP ${response.status.code}。已通过本地抓包管道记录请求和响应。'));
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _entries.add(ChatEntry(role: 'assistant', content: 'AI 重放失败：$error。失败请求也会由 ProxyPin 错误监听记录。'));
+      });
+    }
+  }
+
   Future<void> _pickAndAnalyzeImage() async {
     final result = await FilePicker.pickFiles(type: FileType.image, withData: true);
     final bytes = result?.files.single.bytes;
@@ -496,6 +527,12 @@ class _AiChatPanelState extends State<AiChatPanel> {
             child: Icon(Icons.auto_awesome_rounded, size: 19, color: scheme.onPrimaryContainer),
           ),
           const SizedBox(width: 10),
+          if (widget.currentRequest != null)
+            IconButton(
+              tooltip: '重放当前请求并记录抓包',
+              icon: const Icon(Icons.repeat_rounded, size: 20),
+              onPressed: _sending ? null : _replayCurrentRequest,
+            ),
           IconButton(
             tooltip: '对话记录',
             icon: const Icon(Icons.history_rounded, size: 20),
