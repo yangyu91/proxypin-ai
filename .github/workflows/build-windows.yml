@@ -1,0 +1,62 @@
+name: Build Windows
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Enable Windows desktop
+        run: flutter config --enable-windows-desktop
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build Windows Release
+        run: flutter build windows --release
+
+      - name: Package Windows application
+        shell: pwsh
+        run: |
+          $releaseDir = "build/windows/x64/runner/Release"
+          if (-not (Test-Path $releaseDir)) {
+            throw "Windows Release directory was not generated: $releaseDir"
+          }
+          $zipPath = "build/proxypin-windows-x64.zip"
+          Compress-Archive -Path "$releaseDir\*" -DestinationPath $zipPath -CompressionLevel Optimal
+          Get-Item $zipPath | Format-List FullName,Length
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: proxypin-windows-x64
+          path: build/proxypin-windows-x64.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload Windows executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: proxypin-windows-release-folder
+          path: build/windows/x64/runner/Release
+          if-no-files-found: error
+          retention-days: 14
