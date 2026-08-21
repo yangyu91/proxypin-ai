@@ -164,7 +164,7 @@ private class GeckoBrowserView(
             }
             "clearData" -> {
                 session.purgeHistory()
-                GeckoRuntimeHolder.get(geckoView.context).storageController.clearData(StorageController.ClearFlags.ALL)
+                GeckoRuntimeHolder.get(geckoView.context, localProxyPort).storageController.clearData(StorageController.ClearFlags.ALL)
                 result.success(true)
             }
             else -> result.notImplemented()
