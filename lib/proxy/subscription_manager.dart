@@ -181,8 +181,8 @@ class SubscriptionManager {
       'Connection: close$crlf$crlf',
     );
     await socket.flush();
-    final firstLine = await socket
-        .transform(utf8.decoder)
+    final firstLine = await utf8.decoder
+        .bind(socket.cast<List<int>>())
         .transform(const LineSplitter())
         .first
         .timeout(timeout);
