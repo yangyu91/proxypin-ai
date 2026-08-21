@@ -1,7 +1,9 @@
 package com.network.proxy
 
 import android.content.Context
+import android.util.Log
 import android.view.View
+import java.io.File
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
@@ -12,6 +14,7 @@ import io.flutter.plugin.platform.PlatformViewFactory
 import org.mozilla.geckoview.AllowOrDeny
 import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoRuntime
+import org.mozilla.geckoview.GeckoRuntimeSettings
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoView
 import org.mozilla.geckoview.StorageController
@@ -32,11 +35,33 @@ class GeckoBrowserViewFactory(private val messenger: BinaryMessenger) : Platform
 
 private object GeckoRuntimeHolder {
     private var runtime: GeckoRuntime? = null
+    private var configuredProxyPort: Int? = null
 
     @Synchronized
-    fun get(context: Context): GeckoRuntime {
+    fun get(context: Context, localProxyPort: Int): GeckoRuntime {
         if (runtime == null) {
-            runtime = GeckoRuntime.create(context.applicationContext)
+            // Gecko 默认维护独立 CA 库。启用 Enterprise Roots 后会导入 Android
+            // 已安装的第三方根证书，使用户明确安装并信任 ProxyPin CA 后可进行 HTTPS MITM。
+            // 同时把 Gecko 的 HTTP/HTTPS 偏好指向本机 ProxyPin，避免真实流量绕过 Dart 抓包服务。
+            val configFile = File(context.filesDir, "proxypin-gecko-config.yaml")
+            configFile.writeText("""
+prefs:
+  network.proxy.type: 1
+  network.proxy.http: "127.0.0.1"
+  network.proxy.http_port: $localProxyPort
+  network.proxy.ssl: "127.0.0.1"
+  network.proxy.ssl_port: $localProxyPort
+  network.proxy.share_proxy_settings: true
+  network.proxy.no_proxies_on: "localhost, 127.0.0.1"
+""".trimIndent())
+            val settings = GeckoRuntimeSettings.Builder()
+                .enterpriseRootsEnabled(true)
+                .configFilePath(configFile.absolutePath)
+                .build()
+            runtime = GeckoRuntime.create(context.applicationContext, settings)
+            configuredProxyPort = localProxyPort
+        } else if (configuredProxyPort != localProxyPort) {
+            Log.w("GeckoRuntime", "local proxy port changed after runtime startup; restart app to apply $localProxyPort")
         }
         return runtime!!
     }
@@ -54,6 +79,7 @@ private class GeckoBrowserView(
     private val eventChannel = EventChannel(messenger, "com.proxy/gecko_browser/events/$viewId")
     private var eventSink: EventChannel.EventSink? = null
     private var currentUrl: String = params["initialUrl"]?.toString() ?: "https://www.baidu.com/"
+    private val localProxyPort: Int = (params["localProxyPort"] as? Number)?.toInt() ?: 9099
 
     init {
         methodChannel.setMethodCallHandler(this)
@@ -91,7 +117,7 @@ private class GeckoBrowserView(
             }
         })
 
-        session.open(GeckoRuntimeHolder.get(context))
+        session.open(GeckoRuntimeHolder.get(context, localProxyPort))
         geckoView.setSession(session)
         session.loadUri(currentUrl)
     }
@@ -147,7 +173,7 @@ private class GeckoBrowserView(
 
     override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
         eventSink = events
-        emit("ready", mapOf("url" to currentUrl, "engine" to "Firefox GeckoView"))
+        emit("ready", mapOf("url" to currentUrl, "engine" to "Firefox GeckoView", "localProxyPort" to localProxyPort, "enterpriseRootsEnabled" to true))
     }
 
     override fun onCancel(arguments: Any?) {

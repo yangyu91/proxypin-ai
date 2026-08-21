@@ -19,7 +19,8 @@ class AndroidVpnController {
       'proxyPort': port,
       'allowApps': <String>[],
       'disallowApps': <String>[],
-      'setSystemProxy': true,
+      // GeckoView 自身通过 Firefox 代理偏好连接本机 ProxyPin；不向系统下发 127.0.0.1 代理，避免其它应用出现环回异常。
+      'setSystemProxy': false,
       'proxyPassDomains': <String>[],
     });
     return prepared ?? false;

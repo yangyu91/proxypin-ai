@@ -86,12 +86,16 @@ class HttpProxyChannelHandler extends ChannelHandler<HttpRequest> {
         log.e("[${channel.id}] 连接异常 ${httpRequest.method.name} ${httpRequest.requestUrl}",
             error: error, stackTrace: stackTrace);
         if (httpRequest.method == HttpMethod.connect) {
-          channel.error = error; //记录异常
-          //https代理新建connect连接请求 返回ok 会继续发起正常请求 可以获取到请求内容
-          await channel.write(
-              channelContext,
-              HttpResponse(HttpStatus.ok.reason('Connection established'),
-                  protocolVersion: httpRequest.protocolVersion));
+          channel.error = error;
+          // 不能在上游隧道失败时伪造“Connection established”；否则 Firefox 会继续 TLS
+          // 握手并把故障表现为随机证书/页面错误，且抓包界面无法准确定位代理失败。
+          final detail = utf8.encode('Proxy upstream connection failed: $error');
+          final response = HttpResponse(HttpStatus.newStatus(502, 'Bad Gateway'), protocolVersion: httpRequest.protocolVersion)
+            ..request = httpRequest
+            ..body = detail
+            ..headers.contentType = 'text/plain'
+            ..headers.contentLength = detail.length;
+          await channel.writeAndClose(channelContext, response);
           return;
         } else {
           final tryRewriteHandler =

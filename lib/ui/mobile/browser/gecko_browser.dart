@@ -60,8 +60,9 @@ class GeckoBrowserController {
 class GeckoBrowserView extends StatelessWidget {
   final GeckoBrowserController controller;
   final String initialUrl;
+  final int localProxyPort;
 
-  const GeckoBrowserView({super.key, required this.controller, required this.initialUrl});
+  const GeckoBrowserView({super.key, required this.controller, required this.initialUrl, required this.localProxyPort});
 
   @override
   Widget build(BuildContext context) {
@@ -71,7 +72,7 @@ class GeckoBrowserView extends StatelessWidget {
     return AndroidView(
       viewType: 'com.proxy/gecko_browser',
       layoutDirection: TextDirection.ltr,
-      creationParams: {'initialUrl': initialUrl},
+      creationParams: {'initialUrl': initialUrl, 'localProxyPort': localProxyPort},
       creationParamsCodec: const StandardMessageCodec(),
       onPlatformViewCreated: controller.attach,
     );

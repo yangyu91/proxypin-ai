@@ -398,10 +398,15 @@ class ProxyVpnService : VpnService(), ProtectSocket {
             packages.forEach {
                 build.addAllowedApplication(it)
             }
-        } else {
-            // 不排除 ProxyPin 自身：内置 WebView 属于同一应用进程，必须进入 VPN
-            // 隧道才能被代理链路处理。VPN 转发线程的出站 socket 会通过 protect()
-            // 绕过自身 VPN，避免形成回环。
+        } else if (localProxy) {
+            // Firefox GeckoView 显式连接 127.0.0.1 的本机 ProxyPin MITM；
+            // 排除宿主应用可防止 Dart ProxyServer 的外连再次回灌 TUN 形成循环。
+            // 浏览器流量仍通过 Gecko 的本地代理偏好进入本机抓包服务。
+            try {
+                build.addDisallowedApplication(baseContext.packageName)
+            } catch (e: Exception) {
+                Log.w("ProxyVpnService", "failed to exclude local proxy host app", e)
+            }
         }
 
         disallowApps?.forEach {

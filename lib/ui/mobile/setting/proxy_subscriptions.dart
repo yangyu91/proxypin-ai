@@ -3,6 +3,7 @@ import 'package:proxypin_ai/network/channel/host_port.dart';
 
 import 'package:proxypin_ai/proxy/subscription_manager.dart';
 import 'package:proxypin_ai/network/bin/configuration.dart';
+import 'package:proxypin_ai/network/bin/server.dart';
 import 'package:proxypin_ai/network/vpn/android_vpn.dart';
 
 class ProxySubscriptionsPage extends StatefulWidget {
@@ -35,7 +36,7 @@ class _ProxySubscriptionsPageState extends State<ProxySubscriptionsPage> {
   }
 
   Future<void> _autoConnectFastest() async {
-    final nodes = _manager.groups.expand((group) => group.nodes).where((node) => node.enabled && ['http', 'socks', 'socks5'].contains(node.scheme)).toList();
+    final nodes = _manager.groups.expand((group) => group.nodes).where((node) => node.enabled && node.scheme == 'http').toList();
     if (nodes.isEmpty) return;
     var candidates = nodes.where((node) => node.latencyMs != null && node.latencyMs! >= 0).toList();
     if (candidates.isEmpty) {
@@ -44,7 +45,7 @@ class _ProxySubscriptionsPageState extends State<ProxySubscriptionsPage> {
       candidates = nodes.where((node) => node.latencyMs != null && node.latencyMs! >= 0).toList();
     }
     if (candidates.isEmpty) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('没有检测到可用的 HTTP/SOCKS 节点')));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('没有检测到可用于 HTTPS 解密链路的 HTTP 节点')));
       return;
     }
     candidates.sort((a, b) => a.latencyMs!.compareTo(b.latencyMs!));
@@ -73,8 +74,13 @@ class _ProxySubscriptionsPageState extends State<ProxySubscriptionsPage> {
   Future<void> _connect(ProxyNode node) async {
     final configuration = widget.configuration;
     if (configuration == null) return;
-    if (!['http', 'socks', 'socks5'].contains(node.scheme)) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('该节点需要 Xray/V2Ray 核心，当前版本暂不能直接连接 vmess/vless/trojan')));
+    if (node.scheme != 'http') {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('该节点需要 Xray/V2Ray 或 SOCKS 核心；当前 HTTPS 解密级联仅支持 HTTP 代理节点')));
+      return;
+    }
+    final proxyServer = ProxyServer.current;
+    if (proxyServer == null || !proxyServer.isRunning) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('本地抓包服务未启动，无法建立 Firefox → 本地 MITM → 外部节点链路')));
       return;
     }
     final userInfo = node.settings['userInfo']?.toString() ?? '';
@@ -86,9 +92,12 @@ class _ProxySubscriptionsPageState extends State<ProxySubscriptionsPage> {
       ..port = node.port
       ..username = auth.isNotEmpty ? Uri.decodeComponent(auth.first) : null
       ..password = auth.length > 1 ? Uri.decodeComponent(auth.sublist(1).join(':')) : null;
+    // Firefox/GeckoView 固定请求本机 ProxyPin；本地 MITM 再使用 externalProxy 级联到订阅节点。
+    configuration.enableSsl = true;
+    configuration.enabledHttp2 = true;
     await configuration.flushConfig();
     try {
-      final vpnProxy = ProxyInfo.of(node.address, node.port)
+      final vpnProxy = ProxyInfo.of('127.0.0.1', proxyServer.port)
         ..enabled = true
         ..capturePacket = true;
       final prepared = await AndroidVpnController.start(vpnProxy);
@@ -96,7 +105,7 @@ class _ProxySubscriptionsPageState extends State<ProxySubscriptionsPage> {
       final running = prepared || await AndroidVpnController.isRunning();
       if (mounted) {
         setState(() => _vpnRunning = running);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(running ? 'VPN 已连接：${node.name}；系统状态栏应显示 VPN 图标' : '已请求 VPN 权限，请在系统弹窗中允许后重试')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(running ? 'VPN 已连接：${node.name}；Firefox 流量将先进入本机 HTTPS MITM，再级联外部节点' : '已请求 VPN 权限，请在系统弹窗中允许后重试')));
       }
     } catch (error) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('VPN 启动失败：$error')));
@@ -152,7 +161,7 @@ class _ProxySubscriptionsPageState extends State<ProxySubscriptionsPage> {
                     children: group.nodes.map((node) => ListTile(
                       leading: Icon(node.enabled ? Icons.cloud_outlined : Icons.cloud_off_outlined),
                       title: Text(node.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-                      subtitle: Text('${node.scheme}://${node.address}:${node.port}'),
+                      subtitle: Text('${node.scheme}://${node.address}:${node.port}${node.scheme == 'http' ? ' · 支持 HTTPS 解密级联' : ' · 需要协议核心'}'),
                       trailing: Wrap(spacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: [
                         Text(node.latencyMs == -1 ? '测速中' : node.latencyMs == null ? '未测速' : '${node.latencyMs} ms'),
                         IconButton(tooltip: '测速', icon: const Icon(Icons.speed_outlined, size: 20), onPressed: () => _test(node)),

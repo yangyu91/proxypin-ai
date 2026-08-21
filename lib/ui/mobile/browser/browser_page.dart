@@ -6,11 +6,13 @@ import 'package:url_launcher/url_launcher.dart';
 
 import 'package:proxypin_ai/ai/ai_workspace.dart';
 import 'package:proxypin_ai/network/bin/configuration.dart';
+import 'package:proxypin_ai/network/bin/server.dart';
 import 'package:proxypin_ai/network/http/http.dart';
 import 'package:proxypin_ai/network/vpn/android_vpn.dart';
 import 'package:proxypin_ai/proxy/subscription_manager.dart';
 import 'package:proxypin_ai/ui/desktop/request/ai_chat.dart';
 import 'package:proxypin_ai/ui/mobile/setting/proxy_subscriptions.dart';
+import 'package:proxypin_ai/ui/mobile/setting/ssl.dart';
 import 'package:proxypin_ai/ui/mobile/browser/gecko_browser.dart';
 
 /// ProxyPin 内置浏览器，浏览器请求可复用当前抓包/VPN 网络链路。
@@ -39,12 +41,15 @@ class _ProxyPinBrowserPageState extends State<ProxyPinBrowserPage> {
   String _title = '浏览器';
   String _proxyLabel = '代理未连接';
   HttpRequest? _activeBrowserRequest;
+  bool _http2Enabled = false;
+  bool _sslMitmEnabled = false;
 
   @override
   void initState() {
     super.initState();
     _geckoController = GeckoBrowserController();
     _geckoEventSubscription = _geckoController.events.listen(_onGeckoEvent);
+    _ensureCapturePipeline();
     _refreshProxyStatus();
     _proxyStatusTimer = Timer.periodic(const Duration(seconds: 2), (_) => _refreshProxyStatus());
   }
@@ -58,6 +63,56 @@ class _ProxyPinBrowserPageState extends State<ProxyPinBrowserPage> {
     super.dispose();
   }
 
+  Future<void> _ensureCapturePipeline() async {
+    final configuration = await Configuration.instance;
+    if (!configuration.enabledHttp2) {
+      configuration.enabledHttp2 = true;
+      await configuration.flushConfig();
+    }
+    if (mounted) setState(() {
+      _http2Enabled = configuration.enabledHttp2;
+      _sslMitmEnabled = configuration.enableSsl;
+    });
+  }
+
+  Future<void> _openHttpsStatus() async {
+    final server = ProxyServer.current;
+    final configuration = await Configuration.instance;
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Firefox HTTPS 抓包状态'),
+        content: Text(
+          !_sslMitmEnabled
+              ? 'HTTPS 解密当前已关闭。开启后仍需在 Android 系统中安装并信任 ProxyPin CA。'
+              : 'Firefox Gecko 内核已启用 Android Enterprise Roots。只有在系统中安装并信任 ProxyPin CA 后，HTTPS/HTTP/2 的请求头和正文才能被解密；未信任时只记录导航和连接元数据。HTTP/2 目前已允许通过 ALPN 协商，具体站点仍可能协商为 HTTP/1.1。',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('关闭')),
+          if (server != null)
+            FilledButton(
+              onPressed: () {
+                Navigator.pop(dialogContext);
+                Navigator.of(context).push(MaterialPageRoute(builder: (_) => MobileSslWidget(proxyServer: server)));
+              },
+              child: const Text('安装 / 管理 CA'),
+            ),
+          if (!_sslMitmEnabled)
+            TextButton(
+              onPressed: () async {
+                configuration.enableSsl = true;
+                await configuration.flushConfig();
+                if (mounted) setState(() => _sslMitmEnabled = true);
+                if (dialogContext.mounted) Navigator.pop(dialogContext);
+              },
+              child: const Text('开启 HTTPS 解密'),
+            ),
+        ],
+      ),
+    );
+  }
+
   void _onGeckoEvent(GeckoBrowserEvent event) {
     final url = event.payload['url']?.toString() ?? '';
     switch (event.type) {
@@ -69,12 +124,19 @@ class _ProxyPinBrowserPageState extends State<ProxyPinBrowserPage> {
       case 'pageStart':
         final parsedUrl = Uri.tryParse(url);
         if (url.isEmpty || (parsedUrl != null && _isBrokenBaiduRedirect(parsedUrl))) return;
-        final request = HttpRequest(HttpMethod.get, url);
-        request.attributes['source'] = 'builtin_firefox_gecko';
-        request.attributes['captureMode'] = 'geckoview_navigation';
-        request.headers.set('User-Agent', 'ProxyPin-Firefox-GeckoView');
-        _activeBrowserRequest = request;
-        widget.onCapturedRequest?.call(request);
+        // Gecko 已固定走本机 ProxyServer 时，真实 HTTP/HTTPS 请求会由代理服务写入抓包列表；
+        // 仅在服务不可用时回退到元数据导航记录，避免与真实请求重复。
+        final liveCapture = ProxyServer.current?.isRunning == true;
+        if (!liveCapture) {
+          final request = HttpRequest(HttpMethod.get, url);
+          request.attributes['source'] = 'builtin_firefox_gecko';
+          request.attributes['captureMode'] = 'geckoview_navigation_metadata_fallback';
+          request.headers.set('User-Agent', 'ProxyPin-Firefox-GeckoView');
+          _activeBrowserRequest = request;
+          widget.onCapturedRequest?.call(request);
+        } else {
+          _activeBrowserRequest = null;
+        }
         if (!mounted) return;
         setState(() {
           _loading = true;
@@ -284,11 +346,16 @@ class _ProxyPinBrowserPageState extends State<ProxyPinBrowserPage> {
         actions: [
           IconButton(tooltip: '返回', icon: const Icon(Icons.chevron_left), onPressed: _geckoController.goBack),
           IconButton(tooltip: '前进', icon: const Icon(Icons.chevron_right), onPressed: _geckoController.goForward),
+          IconButton(tooltip: 'HTTPS / CA 状态', icon: Icon(_sslMitmEnabled ? Icons.verified_user_outlined : Icons.gpp_bad_outlined), onPressed: _openHttpsStatus),
           IconButton(tooltip: '更多', icon: const Icon(Icons.more_horiz), onPressed: _showBrowserMenu),
         ],
         bottom: _loading ? PreferredSize(preferredSize: const Size.fromHeight(2), child: LinearProgressIndicator(value: _progress == 0 ? null : _progress / 100)) : null,
       ),
-      body: Stack(children: [GeckoBrowserView(controller: _geckoController, initialUrl: _homeUrl), Positioned(right: 18, bottom: 22, child: FloatingActionButton.small(heroTag: 'browser-ai-fab', tooltip: 'AI 分析当前抓包', onPressed: _openAi, child: const Icon(Icons.auto_awesome_rounded)))]),
+      body: Stack(children: [
+        GeckoBrowserView(controller: _geckoController, initialUrl: _homeUrl, localProxyPort: ProxyServer.current?.port ?? 9099),
+        Positioned(left: 12, bottom: 22, child: Material(color: scheme.surfaceContainerHighest.withValues(alpha: .94), borderRadius: BorderRadius.circular(12), child: InkWell(onTap: _openHttpsStatus, borderRadius: BorderRadius.circular(12), child: Padding(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7), child: Row(mainAxisSize: MainAxisSize.min, children: [Icon(_sslMitmEnabled ? Icons.https_outlined : Icons.no_encryption_outlined, size: 16, color: _sslMitmEnabled ? Colors.green : scheme.error), const SizedBox(width: 5), Text(_sslMitmEnabled ? 'HTTPS 需信任 CA · ${_http2Enabled ? 'HTTP/2 已启用' : 'HTTP/1.1'}' : 'HTTPS 解密已关闭', style: Theme.of(context).textTheme.labelSmall)])))),
+        Positioned(right: 18, bottom: 22, child: FloatingActionButton.small(heroTag: 'browser-ai-fab', tooltip: 'AI 分析当前抓包', onPressed: _openAi, child: const Icon(Icons.auto_awesome_rounded)))
+      ]),
       bottomNavigationBar: SafeArea(top: false, child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [
         IconButton(tooltip: '主页', icon: const Icon(Icons.home_outlined), onPressed: _goHome),
         IconButton(tooltip: '标签页', icon: const Icon(Icons.tab_outlined), onPressed: _openTabs),
