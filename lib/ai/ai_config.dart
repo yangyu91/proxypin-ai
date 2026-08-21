@@ -28,12 +28,26 @@ class AiConfig {
   static Future<void> saveToken(String token) async => (await _prefs()).setString(_tokenKey, token);
   static Future<String?> readToken() async => (await _prefs()).getString(_tokenKey);
 
+  /// 清除当前网页登录态，下一次登录必须重新读取并保存 Token。
+  static Future<void> clearWebLoginState() async {
+    final prefs = await _prefs();
+    await prefs.remove(_tokenKey);
+    await prefs.setString(_providerTypeKey, AiProviderType.deepSeekWeb.name);
+  }
+
   static Future<void> saveApiKey(String apiKey) async => (await _prefs()).setString(_apiKeyKey, apiKey);
   static Future<String?> readApiKey() async => (await _prefs()).getString(_apiKeyKey);
 
   static Future<void> saveProviderType(AiProviderType type) async => (await _prefs()).setString(_providerTypeKey, type.name);
   static Future<AiProviderType> readProviderType() async {
-    final value = (await _prefs()).getString(_providerTypeKey);
+    final prefs = await _prefs();
+    final value = prefs.getString(_providerTypeKey);
+    // 兼容旧版本：豆包已移除，丢弃其 Cookie，避免误作为 DeepSeek Token 使用。
+    if (value == 'doubaoWeb') {
+      await prefs.remove(_tokenKey);
+      await prefs.setString(_providerTypeKey, AiProviderType.deepSeekWeb.name);
+      return AiProviderType.deepSeekWeb;
+    }
     return AiProviderType.values.firstWhere((t) => t.name == value, orElse: () => AiProviderType.deepSeekWeb);
   }
 

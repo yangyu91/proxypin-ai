@@ -1,226 +1,196 @@
-/// DeepSeek 与豆包网页登录页。
+/// DeepSeek 登录页。
 ///
-/// 登录凭据只在用户设备本地处理；页面不会在加载完成时自动提交任何内容。
-import 'dart:convert';
+/// 移动端在内置 WebView 中登录并读取本地 token；Windows 没有可用的
+/// webview_flutter 实现，因此改为打开系统浏览器并让用户粘贴自己的登录 token。
+import 'dart:io';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import 'ai_config.dart';
-import 'ai_provider.dart';
 
 class DeepSeekLoginPage extends StatefulWidget {
   final ValueChanged<String> onToken;
-  const DeepSeekLoginPage({super.key, required this.onToken});
+  final Future<void> Function()? onReset;
+
+  const DeepSeekLoginPage({super.key, required this.onToken, this.onReset});
+
   @override
   State<DeepSeekLoginPage> createState() => _DeepSeekLoginPageState();
 }
 
 class _DeepSeekLoginPageState extends State<DeepSeekLoginPage> {
   WebViewController? _controller;
+  final TextEditingController _manualTokenController = TextEditingController();
   bool _loading = true;
+  String _status = '请完成 DeepSeek 登录，然后点击右上角“提取 Token”';
   static const String _deepSeekUrl = 'https://chat.deepseek.com/';
+
+  bool get _usesExternalBrowser => Platform.isWindows || Platform.isLinux || Platform.isMacOS;
 
   @override
   void initState() {
     super.initState();
+    if (_usesExternalBrowser) {
+      _loading = false;
+      _status = '桌面版会使用系统浏览器登录 DeepSeek；登录后将 Token 粘贴回来保存。';
+      return;
+    }
+    _initMobileWebView();
+  }
+
+  void _initMobileWebView() {
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setBackgroundColor(const Color(0xFFFFFFFF))
       ..addJavaScriptChannel('TokenExtractor', onMessageReceived: (message) => _handleToken(message.message))
       ..setNavigationDelegate(NavigationDelegate(
+        onPageStarted: (_) {
+          if (mounted) setState(() => _loading = true);
+        },
         onPageFinished: (_) {
           if (mounted) setState(() => _loading = false);
           _extractToken();
         },
+        onWebResourceError: (error) {
+          if (mounted) setState(() {
+            _loading = false;
+            _status = '页面加载失败：${error.description}。可重置登录态后重试。';
+          });
+        },
       ))
-      ..loadRequest(Uri.parse(_deepSeekUrl));
+      ..loadRequest(Uri.parse('$_deepSeekUrl?proxy_pin_login=${DateTime.now().millisecondsSinceEpoch}'));
+  }
+
+  Future<void> _openExternalLogin() async {
+    final opened = await launchUrl(Uri.parse(_deepSeekUrl), mode: LaunchMode.externalApplication);
+    if (!opened && mounted) {
+      setState(() => _status = '无法打开系统浏览器。请手动访问 $_deepSeekUrl 后粘贴 Token。');
+    }
   }
 
   Future<void> _extractToken() async {
+    if (_usesExternalBrowser) return;
+    setState(() => _status = '正在读取 DeepSeek 登录态…');
     try {
       await _controller?.runJavaScript('''
         (function() {
           try {
-            var token = localStorage.getItem('userToken');
-            if (token) TokenExtractor.postMessage(token);
-          } catch (e) {}
+            var keys = ['userToken', 'token', 'accessToken'];
+            for (var i = 0; i < keys.length; i++) {
+              var token = localStorage.getItem(keys[i]);
+              if (token) { TokenExtractor.postMessage(token); return; }
+            }
+            TokenExtractor.postMessage('');
+          } catch (e) { TokenExtractor.postMessage(''); }
         })();
       ''');
-    } catch (e) {
-      debugPrint('提取 DeepSeek token 失败: $e');
+    } catch (error) {
+      if (mounted) setState(() => _status = '提取失败：$error。可重置登录态后重试。');
     }
   }
 
   void _handleToken(String raw) {
     final token = AiConfig.parseUserToken(raw);
-    if (token != null && token.isNotEmpty) widget.onToken(token);
+    if (token != null && token.isNotEmpty) {
+      widget.onToken(token);
+      if (mounted) setState(() => _status = '已读取 DeepSeek Token，正在返回 AI 工作台…');
+    } else if (mounted) {
+      setState(() => _status = '尚未发现 Token。请确认已登录完成，或使用手动粘贴。');
+    }
   }
 
-  @override
-  Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(title: const Text('登录 DeepSeek'), actions: [TextButton(onPressed: _extractToken, child: const Text('提取 Token'))]),
-        body: Stack(children: [if (_controller != null) WebViewWidget(controller: _controller!), if (_loading) const Center(child: CircularProgressIndicator())]),
-      );
-}
-
-/// 豆包网页会话登录页。
-///
-/// 豆包的网页协议和 Cookie 字段可能变化，因此只有在用户点击“读取登录态”
-/// 且检测到 sessionid 等关键字段后才返回给配置层，不会把普通页面 Cookie 当作登录成功。
-class DoubaoLoginPage extends StatefulWidget {
-  final ValueChanged<String> onCookie;
-  const DoubaoLoginPage({super.key, required this.onCookie});
-  @override
-  State<DoubaoLoginPage> createState() => _DoubaoLoginPageState();
-}
-
-class _DoubaoLoginPageState extends State<DoubaoLoginPage> {
-  WebViewController? _controller;
-  final _cookieController = TextEditingController();
-  bool _loading = true;
-  String _status = '请在页面中完成豆包登录，然后点击右上角“读取登录态”';
-  static const _doubaoUrl = 'https://www.doubao.com/chat/';
-  static const _nativeChannel = MethodChannel('com.proxy/doubao');
-
-  @override
-  void initState() {
-    super.initState();
-    _initWebView();
+  void _saveManualToken() {
+    final token = AiConfig.parseUserToken(_manualTokenController.text);
+    if (token == null || token.isEmpty) {
+      setState(() => _status = 'Token 格式为空或无效，请重新粘贴。');
+      return;
+    }
+    widget.onToken(token);
+    setState(() => _status = 'Token 已保存，正在返回 AI 工作台…');
   }
 
-  void _initWebView() {
-    _controller = WebViewController()
-      ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setUserAgent('Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36')
-      ..setBackgroundColor(const Color(0xFFF7F7F7))
-      ..addJavaScriptChannel('CookieExtractor', onMessageReceived: (message) => _handleExtracted(message.message))
-      ..setNavigationDelegate(NavigationDelegate(
-        onPageStarted: (_) {
-          if (mounted) setState(() { _loading = true; _status = '正在加载豆包登录页…'; });
-        },
-        onPageFinished: (_) {
-          if (mounted) setState(() { _loading = false; _status = '登录完成后，请点击右上角“读取登录态”'; });
-        },
-        onWebResourceError: (error) {
-          if (mounted) setState(() { _loading = false; _status = '页面加载失败：${error.description}；可点击刷新重试'; });
-        },
-      ))
-      ..loadRequest(Uri.parse('$_doubaoUrl?proxy_pin_login=${DateTime.now().millisecondsSinceEpoch}'));
-  }
-
-  Future<void> _extractCookie() async {
-    setState(() => _status = '正在读取当前页面登录态…');
+  Future<void> _resetLoginState() async {
+    await widget.onReset?.call();
+    _manualTokenController.clear();
+    if (_usesExternalBrowser) {
+      if (mounted) setState(() => _status = '本应用保存的登录态已清除。可重新打开浏览器登录并粘贴新 Token。');
+      return;
+    }
     try {
-      String nativeCookie = '';
-      try {
-        nativeCookie = await _nativeChannel.invokeMethod<String>('getCookies', {'url': _doubaoUrl}) ?? '';
-      } catch (_) {
-        // 原生 CookieManager 不可用时仍继续读取网页可见 Cookie 和 LocalStorage。
-      }
-      await _controller?.runJavaScript('''
-        (function() {
-          try {
-            var values = {};
-            for (var i = 0; i < localStorage.length; i++) {
-              var key = localStorage.key(i);
-              if (key) values[key] = localStorage.getItem(key);
-            }
-            CookieExtractor.postMessage(JSON.stringify({cookie: document.cookie || '', nativeCookie: ${jsonEncode(nativeCookie)}, localStorage: values}));
-          } catch (e) { CookieExtractor.postMessage(''); }
-        })();
-      ''');
+      await _controller?.runJavaScript('localStorage.clear(); sessionStorage.clear();');
+      await _controller?.clearCache();
+      await WebViewCookieManager().clearCookies();
+      await _controller?.loadRequest(Uri.parse('$_deepSeekUrl?proxy_pin_login=${DateTime.now().millisecondsSinceEpoch}'));
+      if (mounted) setState(() => _status = 'Cookie、缓存和本地 Token 已清除，请重新登录。');
     } catch (error) {
-      setState(() => _status = '读取失败：$error');
+      if (mounted) setState(() => _status = '已清除应用保存的 Token，但网页缓存清除失败：$error');
     }
-  }
-
-  void _handleExtracted(String raw) {
-    String cookie = raw.trim();
-    try {
-      final decoded = jsonDecode(cookie);
-      if (decoded is Map) {
-        final cookiePart = decoded['cookie']?.toString() ?? '';
-        final nativeCookie = decoded['nativeCookie']?.toString() ?? '';
-        final storage = decoded['localStorage'];
-        final candidates = <String>[nativeCookie, cookiePart];
-        if (storage is Map) {
-          for (final entry in storage.entries) {
-            final key = entry.key.toString().toLowerCase();
-            if (key.contains('session') || key.contains('token') || key.contains('login')) {
-              candidates.add('${entry.key}=${entry.value}');
-            }
-          }
-        }
-        cookie = candidates.where((item) => item.trim().isNotEmpty).join('; ');
-      }
-    } catch (_) {}
-
-    if (!isLikelyDoubaoSession(cookie)) {
-      setState(() => _status = '未检测到有效豆包登录态。请确认已登录，并检查页面是否完成跳转；也可以在下方手动粘贴 Cookie。');
-      return;
-    }
-    widget.onCookie(cookie);
-    if (mounted) setState(() => _status = '已检测到豆包完整登录态，正在返回 AI 设置…');
-  }
-
-  Future<void> _clearAndReload() async {
-    await _controller?.clearCache();
-    await WebViewCookieManager().clearCookies();
-    _cookieController.clear();
-    _initWebView();
-    if (mounted) setState(() => _status = '已清除豆包网页缓存，请重新登录');
-  }
-
-  void _submitManualCookie() {
-    final value = _cookieController.text.trim();
-    if (!isLikelyDoubaoSession(value)) {
-      setState(() => _status = 'Cookie 中未发现 sessionid 等豆包登录字段，请重新复制');
-      return;
-    }
-    widget.onCookie(value);
   }
 
   @override
   void dispose() {
-    _cookieController.dispose();
+    _manualTokenController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) => Scaffold(
         appBar: AppBar(
-          title: const Text('登录豆包网页版'),
+          title: const Text('登录 DeepSeek'),
           actions: [
-            TextButton(onPressed: _extractCookie, child: const Text('读取登录态')),
-            IconButton(tooltip: '清除缓存并重新登录', onPressed: _clearAndReload, icon: const Icon(Icons.restart_alt)),
+            if (!_usesExternalBrowser) TextButton(onPressed: _extractToken, child: const Text('提取 Token')),
+            IconButton(tooltip: '重置 Cookie 与登录态', onPressed: _resetLoginState, icon: const Icon(Icons.restart_alt)),
           ],
         ),
-        body: Column(
-          children: [
-            if (_loading) const LinearProgressIndicator(minHeight: 2),
-            Expanded(child: _controller == null ? const SizedBox.shrink() : WebViewWidget(controller: _controller!)),
-            Material(
-              color: Theme.of(context).colorScheme.surfaceContainerHighest,
-              child: SafeArea(
-                top: false,
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-                  child: Column(children: [
-                    Align(alignment: Alignment.centerLeft, child: Text(_status, style: Theme.of(context).textTheme.bodySmall)),
-                    const SizedBox(height: 6),
-                    Row(children: [
-                      Expanded(child: TextField(controller: _cookieController, obscureText: true, decoration: const InputDecoration(isDense: true, labelText: '手动粘贴 Cookie（可选）', border: OutlineInputBorder()))),
-                      const SizedBox(width: 8),
-                      FilledButton(onPressed: _submitManualCookie, child: const Text('保存')),
-                    ]),
-                  ]),
-                ),
-              ),
-            ),
-          ],
+        body: _usesExternalBrowser ? _buildDesktopLogin() : _buildMobileLogin(),
+      );
+
+  Widget _buildMobileLogin() => Column(children: [
+        if (_loading) const LinearProgressIndicator(minHeight: 2),
+        Expanded(child: _controller == null ? const SizedBox.shrink() : WebViewWidget(controller: _controller!)),
+        _buildManualTokenPanel(),
+      ]);
+
+  Widget _buildDesktopLogin() => Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 520),
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              const Icon(Icons.open_in_browser_rounded, size: 48),
+              const SizedBox(height: 16),
+              Text('在浏览器登录 DeepSeek', textAlign: TextAlign.center, style: Theme.of(context).textTheme.titleLarge),
+              const SizedBox(height: 8),
+              Text('Windows 版使用系统浏览器完成网页登录。登录后，将你自己的 DeepSeek Token 粘贴到下方保存。', textAlign: TextAlign.center, style: Theme.of(context).textTheme.bodyMedium),
+              const SizedBox(height: 18),
+              FilledButton.icon(onPressed: _openExternalLogin, icon: const Icon(Icons.open_in_new_rounded), label: const Text('打开 DeepSeek 登录页')),
+              const SizedBox(height: 12),
+              _buildManualTokenPanel(),
+            ]),
+          ),
+        ),
+      );
+
+  Widget _buildManualTokenPanel() => Material(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        child: SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Align(alignment: Alignment.centerLeft, child: Text(_status, style: Theme.of(context).textTheme.bodySmall)),
+              const SizedBox(height: 8),
+              Row(children: [
+                Expanded(child: TextField(controller: _manualTokenController, obscureText: true, decoration: const InputDecoration(isDense: true, labelText: '手动粘贴 DeepSeek Token', border: OutlineInputBorder()))),
+                const SizedBox(width: 8),
+                FilledButton(onPressed: _saveManualToken, child: const Text('保存')),
+              ]),
+              const SizedBox(height: 4),
+              TextButton.icon(onPressed: _resetLoginState, icon: const Icon(Icons.restart_alt, size: 17), label: const Text('重置 Cookie / Token 后重新登录')),
+            ]),
+          ),
         ),
       );
 }

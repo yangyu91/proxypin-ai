@@ -131,7 +131,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
       _memory = memory;
       _includeSensitive = includeSensitive;
       _confirmActions = confirmActions;
-      _configured = type == AiProviderType.deepSeekWeb ? _token.isNotEmpty : type == AiProviderType.doubaoWeb ? isLikelyDoubaoSession(_token) : _apiKey.isNotEmpty;
+      _configured = type == AiProviderType.deepSeekWeb ? _token.isNotEmpty : _apiKey.isNotEmpty;
       _conversation = _conversationStore.active ?? _conversationStore.create(provider: type);
       _entries
         ..clear()
@@ -295,26 +295,12 @@ class _AiChatPanelState extends State<AiChatPanel> {
     );
   }
 
-  Future<void> _openDoubaoLogin() async {
-    final cookie = await Navigator.of(context).push<String>(MaterialPageRoute(builder: (_) => DoubaoLoginPage(onCookie: (value) => Navigator.of(context).pop(value))));
-    if (cookie != null && isLikelyDoubaoSession(cookie)) {
-      await AiConfig.saveToken(cookie.trim());
-      await AiConfig.saveProviderType(AiProviderType.doubaoWeb);
-      if (!mounted) return;
-      setState(() {
-        _token = cookie.trim();
-        _providerType = AiProviderType.doubaoWeb;
-        _configured = true;
-      });
-      _buildProvider();
-    }
-  }
-
   Future<void> _openLogin() async {
     final token = await Navigator.of(context).push<String>(
-      MaterialPageRoute(builder: (_) => DeepSeekLoginPage(onToken: (token) {
-        Navigator.of(context).pop(token);
-      })),
+      MaterialPageRoute(builder: (_) => DeepSeekLoginPage(
+        onToken: (token) => Navigator.of(context).pop(token),
+        onReset: _resetWebLoginState,
+      )),
     );
     if (token != null && token.isNotEmpty) {
       await AiConfig.saveToken(token);
@@ -328,12 +314,22 @@ class _AiChatPanelState extends State<AiChatPanel> {
     }
   }
 
+  Future<void> _resetWebLoginState() async {
+    await AiConfig.clearWebLoginState();
+    _provider?.dispose();
+    _provider = null;
+    if (!mounted) return;
+    setState(() {
+      _token = '';
+      _providerType = AiProviderType.deepSeekWeb;
+      _configured = false;
+    });
+  }
+
   String _providerLabel(AiProviderType type) {
     switch (type) {
       case AiProviderType.deepSeekWeb:
         return 'DeepSeek 网页版';
-      case AiProviderType.doubaoWeb:
-        return '豆包网页版（免费）';
       case AiProviderType.deepSeekOfficial:
         return 'DeepSeek 官方 API';
       case AiProviderType.openAiCompatible:
@@ -422,7 +418,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
                   _skills = skills;
                   _includeSensitive = includeSensitive;
                   _confirmActions = confirmActions;
-                  _configured = provider == AiProviderType.deepSeekWeb ? _token.isNotEmpty : provider == AiProviderType.doubaoWeb ? isLikelyDoubaoSession(_token) : key.isNotEmpty;
+                  _configured = provider == AiProviderType.deepSeekWeb ? _token.isNotEmpty : key.isNotEmpty;
                 });
                 if (_configured) _buildProvider();
                 if (ctx.mounted) Navigator.pop(ctx);
@@ -594,8 +590,8 @@ class _AiChatPanelState extends State<AiChatPanel> {
                 width: double.infinity,
                 child: FilledButton.icon(
                   icon: const Icon(Icons.login_rounded, size: 18),
-                  label: Text(_providerType == AiProviderType.doubaoWeb ? '登录豆包网页版' : '登录 DeepSeek 网页版'),
-                  onPressed: _providerType == AiProviderType.doubaoWeb ? _openDoubaoLogin : _openLogin,
+                  label: const Text('登录 DeepSeek 网页版'),
+                  onPressed: _openLogin,
                 ),
               ),
               const SizedBox(height: 8),
