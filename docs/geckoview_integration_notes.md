@@ -60,3 +60,7 @@ ProxyPin 的 TLS 拦截逻辑会在 `Configuration.enabledHttp2` 为真时从 Cl
 Mozilla 将可编程 Gecko 偏好归类为自动化/调试能力，并提醒自定义配置可能降低安全性。此实现将配置文件写入应用私有目录，只写入固定的本机 HTTP/HTTPS 代理偏好，不接受网页或远程内容注入偏好。
 
 参考：<https://firefox-source-docs.mozilla.org/mobile/android/geckoview/consumer/automation.html>
+
+## Android 版本兼容性
+
+当前选用的 GeckoView `148.0.20260309125808` 在其 AndroidManifest 中声明 `minSdkVersion=26`。因此，使用 Firefox 内核的 Android 构建必须将最低系统版本设为 Android 8.0（API 26）；不能用 Manifest `overrideLibrary` 绕过该声明，否则旧版 Android 会因 GeckoView 所调用的 API 缺失而面临运行时失败。
