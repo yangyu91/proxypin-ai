@@ -124,4 +124,7 @@ dependencies {
     // 141.x 使用 Kotlin 2.1.x 与 AndroidX Core 1.16，兼容当前 Kotlin/AGP 工具链和 compileSdk 36；
     // 同时保留 GeckoRuntimeSettings.enterpriseRootsEnabled 与 configFilePath。
     implementation 'org.mozilla.geckoview:geckoview:141.0.20250806102122'
+    // 2dust AndroidLibXrayLite：嵌入式 Xray Core，包含 armeabi-v7a、arm64-v8a 和 x86_64 JNI。
+    // 由 GitHub Actions 从受版本锁定的仓库文件构建，不在运行时下载可执行代码。
+    implementation files('libs/libv2ray.aar')
 }

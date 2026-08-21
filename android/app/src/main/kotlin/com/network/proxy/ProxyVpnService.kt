@@ -173,6 +173,8 @@ class ProxyVpnService : VpnService(), ProtectSocket {
     }
 
     private fun disconnect() {
+        // 防止系统回收服务或通知栏断开时遗留 Xray 本机监听端口与 native 资源。
+        XrayCoreManager.stop()
         unregisterNetworkCallback()
         vpnThread?.run { stopThread() }
         vpnInterface?.close()

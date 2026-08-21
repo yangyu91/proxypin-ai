@@ -20,7 +20,10 @@ class _ProxySubscriptionsPageState extends State<ProxySubscriptionsPage> {
   final _manager = SubscriptionManager.instance;
   bool _loading = true;
   bool _vpnRunning = false;
+  XrayCoreStatus _xrayStatus = const XrayCoreStatus(running: false);
   String? _error;
+
+  bool _usesXrayCore(ProxyNode node) => const {'vmess', 'vless', 'trojan', 'ss', 'socks', 'socks5'}.contains(node.scheme);
 
   @override
   void initState() {
@@ -31,12 +34,13 @@ class _ProxySubscriptionsPageState extends State<ProxySubscriptionsPage> {
   Future<void> _load() async {
     await _manager.load();
     _vpnRunning = await AndroidVpnController.isRunning();
+    _xrayStatus = await AndroidVpnController.xrayStatus();
     if (mounted) setState(() => _loading = false);
     if (widget.autoConnectFastest) await _autoConnectFastest();
   }
 
   Future<void> _autoConnectFastest() async {
-    final nodes = _manager.groups.expand((group) => group.nodes).where((node) => node.enabled && node.scheme == 'http').toList();
+    final nodes = _manager.groups.expand((group) => group.nodes).where((node) => node.enabled && (node.scheme == 'http' || _usesXrayCore(node))).toList();
     if (nodes.isEmpty) return;
     // 已缓存的“端口可达”延迟不足以证明节点可代理 HTTPS；每次自动连接前
     // 都重新完成 HTTP CONNECT 验证，避免失效节点让 Firefox 全部导航超时。
@@ -73,15 +77,18 @@ class _ProxySubscriptionsPageState extends State<ProxySubscriptionsPage> {
   Future<void> _connect(ProxyNode node) async {
     final configuration = widget.configuration;
     if (configuration == null) return;
-    if (node.scheme != 'http') {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('该节点需要 Xray/V2Ray 或 SOCKS 核心；当前 HTTPS 解密级联仅支持 HTTP 代理节点')));
+    final usesXray = _usesXrayCore(node);
+    if (node.scheme != 'http' && !usesXray) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('暂不支持 ${node.scheme} 节点；当前支持 HTTP、VMess、VLESS、Trojan、Shadowsocks 与 SOCKS。')));
       return;
     }
-    // 连接按钮也必须复验完整 HTTP CONNECT，而不能相信旧的 TCP 延迟记录。
-    final latency = await _manager.testLatency(node, timeout: const Duration(seconds: 4));
-    if (latency == null) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('该节点无法完成 HTTPS 代理握手，未连接；浏览器将保持直连抓包。')));
-      return;
+    // HTTP 节点须完成真实 CONNECT；协议节点会在下方由嵌入式 Xray Core 校验配置并启动本机入站。
+    if (!usesXray) {
+      final latency = await _manager.testLatency(node, timeout: const Duration(seconds: 4));
+      if (latency == null) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('该节点无法完成 HTTPS 代理握手，未连接；浏览器将保持直连抓包。')));
+        return;
+      }
     }
 
     final proxyServer = ProxyServer.current;
@@ -89,16 +96,40 @@ class _ProxySubscriptionsPageState extends State<ProxySubscriptionsPage> {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('本地抓包服务未启动，无法建立 Firefox → 本地 MITM → 外部节点链路')));
       return;
     }
-    final userInfo = node.settings['userInfo']?.toString() ?? '';
-    final auth = userInfo.isEmpty ? const <String>[] : userInfo.split(':');
+    String upstreamHost = node.address;
+    int upstreamPort = node.port;
+    String? username;
+    String? password;
+    if (usesXray) {
+      final rawLink = node.settings['raw']?.toString() ?? '';
+      try {
+        _xrayStatus = await AndroidVpnController.startXrayCore(rawLink, name: node.name);
+      } catch (error) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Xray 核心启动失败：$error')));
+        return;
+      }
+      if (!_xrayStatus.running) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_xrayStatus.error ?? 'Xray 核心未能启动该节点')));
+        return;
+      }
+      upstreamHost = '127.0.0.1';
+      upstreamPort = _xrayStatus.httpPort;
+    } else {
+      await AndroidVpnController.stopXrayCore();
+      final userInfo = node.settings['userInfo']?.toString() ?? '';
+      final auth = userInfo.isEmpty ? const <String>[] : userInfo.split(':');
+      username = auth.isNotEmpty ? Uri.decodeComponent(auth.first) : null;
+      password = auth.length > 1 ? Uri.decodeComponent(auth.sublist(1).join(':')) : null;
+    }
+
     configuration.externalProxy = ProxyInfo()
       ..enabled = true
       ..capturePacket = true
-      ..host = node.address
-      ..port = node.port
-      ..username = auth.isNotEmpty ? Uri.decodeComponent(auth.first) : null
-      ..password = auth.length > 1 ? Uri.decodeComponent(auth.sublist(1).join(':')) : null;
-    // Firefox/GeckoView 固定请求本机 ProxyPin；本地 MITM 再使用 externalProxy 级联到订阅节点。
+      ..host = upstreamHost
+      ..port = upstreamPort
+      ..username = username
+      ..password = password;
+    // Firefox/GeckoView 固定请求本机 ProxyPin；本地 MITM 再使用 externalProxy 级联到 HTTP 节点或 Xray 本机入站。
     configuration.enableSsl = true;
     configuration.enabledHttp2 = true;
     await configuration.flushConfig();
@@ -111,7 +142,10 @@ class _ProxySubscriptionsPageState extends State<ProxySubscriptionsPage> {
       final running = prepared || await AndroidVpnController.isRunning();
       if (mounted) {
         setState(() => _vpnRunning = running);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(running ? 'VPN 已连接：${node.name}；Firefox 流量将先进入本机 HTTPS MITM，再级联外部节点' : '已请求 VPN 权限，请在系统弹窗中允许后重试')));
+        final route = usesXray
+            ? 'Xray ${node.scheme.toUpperCase()} 核心已在本机 ${_xrayStatus.httpPort} 端口运行'
+            : 'HTTP 上游节点已连接';
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(running ? 'VPN 已连接：${node.name}；$route。Firefox 流量将先进入本机 HTTPS MITM，再级联上游节点' : '已请求 VPN 权限，请在系统弹窗中允许后重试')));
       }
     } catch (error) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('VPN 启动失败：$error')));
@@ -120,6 +154,7 @@ class _ProxySubscriptionsPageState extends State<ProxySubscriptionsPage> {
 
   Future<void> _disconnectVpn() async {
     await AndroidVpnController.stop();
+    _xrayStatus = const XrayCoreStatus(running: false);
     if (mounted) setState(() => _vpnRunning = false);
   }
 
@@ -155,8 +190,8 @@ class _ProxySubscriptionsPageState extends State<ProxySubscriptionsPage> {
                 Card(
                   child: ListTile(
                     leading: Icon(_vpnRunning ? Icons.vpn_lock : Icons.vpn_key_off, color: _vpnRunning ? Colors.green : null),
-                    title: Text(_vpnRunning ? 'VPN 已连接' : 'VPN 未连接'),
-                    subtitle: Text(_vpnRunning ? '系统状态栏应显示 VPN 图标，浏览器和应用流量会进入 VPN' : '连接节点后会申请 Android VPN 权限'),
+                    title: Text(_vpnRunning ? (_xrayStatus.running ? 'VPN 已连接 · Xray ${_xrayStatus.protocol?.toUpperCase() ?? ''}' : 'VPN 已连接') : 'VPN 未连接'),
+                    subtitle: Text(_vpnRunning ? (_xrayStatus.running ? '协议核心正在通过本机 ${_xrayStatus.httpPort} 端口级联；系统状态栏应显示 VPN 图标' : '系统状态栏应显示 VPN 图标，浏览器和应用流量会进入 VPN') : '连接节点后会申请 Android VPN 权限'),
                     trailing: _vpnRunning ? TextButton(onPressed: _disconnectVpn, child: const Text('断开')) : null,
                   ),
                 ),
@@ -167,7 +202,7 @@ class _ProxySubscriptionsPageState extends State<ProxySubscriptionsPage> {
                     children: group.nodes.map((node) => ListTile(
                       leading: Icon(node.enabled ? Icons.cloud_outlined : Icons.cloud_off_outlined),
                       title: Text(node.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-                      subtitle: Text('${node.scheme}://${node.address}:${node.port}${node.scheme == 'http' ? ' · 支持 HTTPS 解密级联' : ' · 需要协议核心'}'),
+                      subtitle: Text('${node.scheme}://${node.address}:${node.port}${node.scheme == 'http' ? ' · 支持 HTTPS 解密级联' : _usesXrayCore(node) ? ' · 内置 Xray 协议核心' : ' · 暂不支持'}'),
                       trailing: Wrap(spacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: [
                         Text(node.latencyMs == -1 ? '测速中' : node.latencyMs == null ? '未测速' : '${node.latencyMs} ms'),
                         IconButton(tooltip: '测速', icon: const Icon(Icons.speed_outlined, size: 20), onPressed: () => _test(node)),

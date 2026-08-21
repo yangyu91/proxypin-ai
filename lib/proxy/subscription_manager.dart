@@ -94,15 +94,67 @@ class SubscriptionManager {
   }
 
   ProxyNode? _parseUri(String value, int index) {
+    final scheme = value.substringBefore('://').toLowerCase();
+    if (!['vmess', 'vless', 'trojan', 'ss', 'socks', 'socks5', 'http'].contains(scheme)) return null;
+    if (scheme == 'vmess') return _parseVmess(value, index);
+    if (scheme == 'ss') return _parseShadowsocks(value, index);
+
     final uri = Uri.tryParse(value);
-    if (uri == null || !['vmess', 'vless', 'trojan', 'ss', 'socks', 'socks5', 'http'].contains(uri.scheme.toLowerCase())) return null;
-    final host = uri.host;
-    final port = uri.port;
-    if (host.isEmpty || port <= 0) return null;
-    final scheme = uri.scheme.toLowerCase();
-    final name = Uri.decodeComponent(uri.fragment.isEmpty ? '$scheme-$host:$port' : uri.fragment);
-    final id = '${scheme}_${host}_$port';
-    return ProxyNode(id: id, name: name, scheme: scheme, address: host, port: port, settings: {'raw': value, 'userInfo': uri.userInfo, 'query': uri.queryParameters}, enabled: true);
+    if (uri == null || uri.host.isEmpty || uri.port <= 0) return null;
+    final name = Uri.decodeComponent(uri.fragment.isEmpty ? '$scheme-${uri.host}:${uri.port}' : uri.fragment);
+    final id = '${scheme}_${uri.host}_${uri.port}';
+    return ProxyNode(id: id, name: name, scheme: scheme, address: uri.host, port: uri.port, settings: {'raw': value, 'userInfo': uri.userInfo, 'query': uri.queryParameters}, enabled: true);
+  }
+
+  ProxyNode? _parseVmess(String value, int index) {
+    try {
+      final encoded = value.substringAfter('://').split('#').first;
+      final decoded = jsonDecode(_decodeUrlSafeBase64(encoded));
+      if (decoded is! Map) return null;
+      final host = decoded['add']?.toString() ?? '';
+      final port = int.tryParse(decoded['port']?.toString() ?? '') ?? 0;
+      if (host.isEmpty || port <= 0) return null;
+      final name = decoded['ps']?.toString().trim();
+      return ProxyNode(
+        id: 'vmess_${host}_$port',
+        name: name == null || name.isEmpty ? 'vmess-$host:$port' : name,
+        scheme: 'vmess',
+        address: host,
+        port: port,
+        settings: {'raw': value, 'userInfo': '', 'query': <String, String>{}},
+        enabled: true,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  ProxyNode? _parseShadowsocks(String value, int index) {
+    try {
+      final fragmentIndex = value.indexOf('#');
+      final fragment = fragmentIndex >= 0 ? value.substring(fragmentIndex + 1) : '';
+      final compact = value.substring('ss://'.length, fragmentIndex >= 0 ? fragmentIndex : value.length);
+      final normalized = compact.contains('@') ? compact : _decodeUrlSafeBase64(compact);
+      final uri = Uri.tryParse('ss://$normalized');
+      if (uri == null || uri.host.isEmpty || uri.port <= 0) return null;
+      final name = fragment.isEmpty ? 'ss-${uri.host}:${uri.port}' : Uri.decodeComponent(fragment);
+      return ProxyNode(
+        id: 'ss_${uri.host}_${uri.port}',
+        name: name,
+        scheme: 'ss',
+        address: uri.host,
+        port: uri.port,
+        settings: {'raw': value, 'userInfo': uri.userInfo, 'query': uri.queryParameters},
+        enabled: true,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String _decodeUrlSafeBase64(String value) {
+    final normalized = base64.normalize(value.trim().replaceAll('-', '+').replaceAll('_', '/'));
+    return utf8.decode(base64.decode(normalized));
   }
 
   Future<List<int?>> testGroup(ProxyGroup group, {Duration timeout = const Duration(seconds: 5)}) async {

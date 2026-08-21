@@ -3,6 +3,7 @@ package com.network.proxy.plugin
 import android.os.Build
 import androidx.core.content.ContextCompat
 import com.network.proxy.ProxyVpnService
+import com.network.proxy.XrayCoreManager
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.MethodChannel
 
@@ -46,6 +47,29 @@ class VpnServicePlugin : AndroidFlutterPlugin() {
                 "stopVpn" -> {
                     stopVpn()
                     result.success(null)
+                }
+
+                "startXrayCore" -> {
+                    val rawLink = call.argument<String>("rawLink")
+                    val name = call.argument<String>("name")
+                    if (rawLink.isNullOrBlank()) {
+                        result.error("invalid_node", "协议节点链接不能为空", null)
+                    } else {
+                        val status = XrayCoreManager.start(activity.applicationContext, rawLink, name)
+                        if (status["running"] == true) {
+                            result.success(status)
+                        } else {
+                            result.error("xray_start_failed", status["error"]?.toString() ?: "Xray 核心启动失败", status)
+                        }
+                    }
+                }
+
+                "stopXrayCore" -> {
+                    result.success(XrayCoreManager.stop())
+                }
+
+                "xrayStatus" -> {
+                    result.success(XrayCoreManager.status())
                 }
 
                 "restartVpn" -> {
@@ -99,6 +123,8 @@ class VpnServicePlugin : AndroidFlutterPlugin() {
      * 停止vpn服务
      */
     private fun stopVpn() {
+        // 协议核心仅服务于当前 VPN/ProxyPin 级联；断开时同步释放监听端口和 native 资源。
+        XrayCoreManager.stop()
         activity.startService(ProxyVpnService.stopVpnIntent(activity))
     }
 }
