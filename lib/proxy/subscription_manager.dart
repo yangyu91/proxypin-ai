@@ -94,7 +94,9 @@ class SubscriptionManager {
   }
 
   ProxyNode? _parseUri(String value, int index) {
-    final scheme = value.substringBefore('://').toLowerCase();
+    final separator = value.indexOf('://');
+    if (separator <= 0) return null;
+    final scheme = value.substring(0, separator).toLowerCase();
     if (!['vmess', 'vless', 'trojan', 'ss', 'socks', 'socks5', 'http'].contains(scheme)) return null;
     if (scheme == 'vmess') return _parseVmess(value, index);
     if (scheme == 'ss') return _parseShadowsocks(value, index);
@@ -108,7 +110,7 @@ class SubscriptionManager {
 
   ProxyNode? _parseVmess(String value, int index) {
     try {
-      final encoded = value.substringAfter('://').split('#').first;
+      final encoded = value.substring('vmess://'.length).split('#').first;
       final decoded = jsonDecode(_decodeUrlSafeBase64(encoded));
       if (decoded is! Map) return null;
       final host = decoded['add']?.toString() ?? '';
