@@ -19,6 +19,10 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         pluginRegister(flutterEngine)
+        flutterEngine.platformViewsController.registry.registerViewFactory(
+            "com.proxy/gecko_browser",
+            GeckoBrowserViewFactory(flutterEngine.dartExecutor.binaryMessenger)
+        )
     }
 
     override fun onUserLeaveHint() {

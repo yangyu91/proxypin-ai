@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
-import 'package:webview_flutter/webview_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'package:proxypin_ai/ai/ai_workspace.dart';
 import 'package:proxypin_ai/network/bin/configuration.dart';
@@ -11,6 +11,7 @@ import 'package:proxypin_ai/network/vpn/android_vpn.dart';
 import 'package:proxypin_ai/proxy/subscription_manager.dart';
 import 'package:proxypin_ai/ui/desktop/request/ai_chat.dart';
 import 'package:proxypin_ai/ui/mobile/setting/proxy_subscriptions.dart';
+import 'package:proxypin_ai/ui/mobile/browser/gecko_browser.dart';
 
 /// ProxyPin 内置浏览器，浏览器请求可复用当前抓包/VPN 网络链路。
 class ProxyPinBrowserPage extends StatefulWidget {
@@ -26,7 +27,8 @@ class ProxyPinBrowserPage extends StatefulWidget {
 
 class _ProxyPinBrowserPageState extends State<ProxyPinBrowserPage> {
   static const _homeUrl = 'https://www.baidu.com/';
-  late final WebViewController _controller;
+  late final GeckoBrowserController _geckoController;
+  late final StreamSubscription<GeckoBrowserEvent> _geckoEventSubscription;
   final _addressController = TextEditingController(text: _homeUrl);
   final _bookmarks = <String>[];
   final _tabs = <String>[_homeUrl];
@@ -41,51 +43,8 @@ class _ProxyPinBrowserPageState extends State<ProxyPinBrowserPage> {
   @override
   void initState() {
     super.initState();
-    _controller = WebViewController()
-      ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setBackgroundColor(ThemeData.dark().scaffoldBackgroundColor)
-      ..setNavigationDelegate(
-        NavigationDelegate(
-          onProgress: (progress) => setState(() {
-            _progress = progress;
-            _loading = progress < 100;
-          }),
-          onPageStarted: (url) {
-            final request = HttpRequest(HttpMethod.get, url);
-            request.attributes['source'] = 'builtin_browser';
-            request.attributes['captureMode'] = 'webview_navigation';
-            request.headers.set('User-Agent', 'ProxyPin-BuiltInBrowser');
-            _activeBrowserRequest = request;
-            widget.onCapturedRequest?.call(request);
-            setState(() {
-              _loading = true;
-              _addressController.text = url;
-              if (_tabs.isEmpty) _tabs.add(url);
-              _tabs[_tabs.length - 1] = url;
-              AiWorkspace.instance.setBrowserPage(url: url);
-            });
-          },
-          onPageFinished: (url) async {
-            final pageTitle = await _controller.getTitle();
-            if (!mounted) return;
-            setState(() {
-              _loading = false;
-              _addressController.text = url;
-              _title = pageTitle?.trim().isNotEmpty == true ? pageTitle!.trim() : '浏览器';
-              if (_activeBrowserRequest?.requestUrl == url) {
-                final response = HttpResponse(HttpStatus.ok);
-                response.request = _activeBrowserRequest;
-                response.responseTime = DateTime.now();
-                _activeBrowserRequest!.response = response;
-                widget.onCapturedResponse?.call(response);
-              }
-              AiWorkspace.instance.setBrowserPage(url: url, title: _title);
-            });
-          },
-          onWebResourceError: (_) => setState(() => _loading = false),
-        ),
-      )
-      ..loadRequest(Uri.parse(_homeUrl));
+    _geckoController = GeckoBrowserController();
+    _geckoEventSubscription = _geckoController.events.listen(_onGeckoEvent);
     _refreshProxyStatus();
     _proxyStatusTimer = Timer.periodic(const Duration(seconds: 2), (_) => _refreshProxyStatus());
   }
@@ -93,8 +52,73 @@ class _ProxyPinBrowserPageState extends State<ProxyPinBrowserPage> {
   @override
   void dispose() {
     _proxyStatusTimer?.cancel();
+    _geckoEventSubscription.cancel();
+    _geckoController.dispose();
     _addressController.dispose();
     super.dispose();
+  }
+
+  void _onGeckoEvent(GeckoBrowserEvent event) {
+    final url = event.payload['url']?.toString() ?? '';
+    switch (event.type) {
+      case 'ready':
+        if (url.isNotEmpty && _activeBrowserRequest == null) {
+          _onGeckoEvent(GeckoBrowserEvent(type: 'pageStart', payload: {'url': url}));
+        }
+        break;
+      case 'pageStart':
+        final parsedUrl = Uri.tryParse(url);
+        if (url.isEmpty || (parsedUrl != null && _isBrokenBaiduRedirect(parsedUrl))) return;
+        final request = HttpRequest(HttpMethod.get, url);
+        request.attributes['source'] = 'builtin_firefox_gecko';
+        request.attributes['captureMode'] = 'geckoview_navigation';
+        request.headers.set('User-Agent', 'ProxyPin-Firefox-GeckoView');
+        _activeBrowserRequest = request;
+        widget.onCapturedRequest?.call(request);
+        if (!mounted) return;
+        setState(() {
+          _loading = true;
+          if (!_isTransientBaiduUrl(url)) _addressController.text = url;
+          if (_tabs.isEmpty) _tabs.add(url);
+          _tabs[_tabs.length - 1] = url;
+          AiWorkspace.instance.setBrowserPage(url: url);
+        });
+        break;
+      case 'progress':
+        final progress = event.payload['progress'];
+        if (!mounted) return;
+        setState(() {
+          _progress = progress is num ? progress.toInt().clamp(0, 100).toInt() : _progress;
+          _loading = _progress < 100;
+        });
+        break;
+      case 'title':
+        final title = event.payload['title']?.toString().trim();
+        if (title != null && title.isNotEmpty && mounted) {
+          setState(() => _title = title);
+          AiWorkspace.instance.setBrowserPage(url: url.isEmpty ? _addressController.text : url, title: title);
+        }
+        break;
+      case 'navigationBlocked':
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Firefox 已拦截无法加载的百度异常中转地址。')));
+        break;
+      case 'pageStop':
+        if (!mounted) return;
+        final success = event.payload['success'] == true;
+        setState(() {
+          _loading = false;
+          _progress = success ? 100 : _progress;
+          if (_activeBrowserRequest != null && _activeBrowserRequest!.response == null) {
+            final response = HttpResponse(success ? HttpStatus.ok : HttpStatus.badGateway);
+            response.request = _activeBrowserRequest;
+            response.responseTime = DateTime.now();
+            _activeBrowserRequest!.response = response;
+            widget.onCapturedResponse?.call(response);
+          }
+          AiWorkspace.instance.setBrowserPage(url: url.isEmpty ? _addressController.text : url, title: _title);
+        });
+        break;
+    }
   }
 
   Future<void> _refreshProxyStatus() async {
@@ -126,15 +150,38 @@ class _ProxyPinBrowserPageState extends State<ProxyPinBrowserPage> {
     }
   }
 
+  bool _isTransientBaiduUrl(String value) {
+    final uri = Uri.tryParse(value);
+    if (uri == null || !uri.host.endsWith('baidu.com')) return false;
+    return uri.path == '/link' || uri.path.startsWith('/from') || uri.path.contains('redirect');
+  }
+
+  bool _isBrokenBaiduRedirect(Uri uri) {
+    final isBaidu = uri.host.endsWith('baidu.com');
+    final isRedirect = uri.path == '/link' || uri.path.startsWith('/from') || uri.path.contains('redirect');
+    return isBaidu && isRedirect && uri.toString().length > 4096;
+  }
+
+  Uri _normalizeAddress(String raw) {
+    final value = raw.trim();
+    final direct = Uri.tryParse(value);
+    if (direct != null && (direct.scheme == 'http' || direct.scheme == 'https') && direct.host.isNotEmpty) return direct;
+    if (!value.contains(' ') && value.contains('.')) {
+      final withScheme = Uri.tryParse('https://$value');
+      if (withScheme != null && withScheme.host.isNotEmpty) return withScheme;
+    }
+    return Uri.https('www.baidu.com', '/s', {'wd': value});
+  }
+
   Future<void> _openAddress() async {
     final raw = _addressController.text.trim();
     if (raw.isEmpty) return;
-    final value = raw.contains('://')
-        ? raw
-        : (raw.contains('.') && !raw.contains(' ')
-            ? 'https://$raw'
-            : 'https://www.baidu.com/s?wd=${Uri.encodeComponent(raw)}');
-    await _controller.loadRequest(Uri.tryParse(value) ?? Uri.parse(_homeUrl));
+    final target = _normalizeAddress(raw);
+    if (_isBrokenBaiduRedirect(target)) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('该百度中转地址过长且无法安全加载，请返回搜索结果页重新打开。')));
+      return;
+    }
+    await _geckoController.loadUrl(target.toString());
   }
 
   Future<void> _showBrowserMenu() async {
@@ -144,16 +191,23 @@ class _ProxyPinBrowserPageState extends State<ProxyPinBrowserPage> {
       builder: (sheetContext) => SafeArea(
         child: Wrap(children: [
           ListTile(leading: const Icon(Icons.home_outlined), title: const Text('主页'), onTap: () { Navigator.pop(sheetContext); _goHome(); }),
-          ListTile(leading: const Icon(Icons.refresh), title: const Text('刷新页面'), onTap: () { Navigator.pop(sheetContext); _controller.reload(); }),
+          ListTile(leading: const Icon(Icons.refresh), title: const Text('刷新页面'), onTap: () { Navigator.pop(sheetContext); _geckoController.reload(); }),
           ListTile(leading: const Icon(Icons.share_outlined), title: const Text('分享链接'), onTap: () async { Navigator.pop(sheetContext); await SharePlus.instance.share(ShareParams(uri: Uri.tryParse(_addressController.text))); }),
           ListTile(leading: const Icon(Icons.bookmark_add_outlined), title: const Text('收藏当前页面'), onTap: () { Navigator.pop(sheetContext); _addBookmark(); }),
-          ListTile(leading: const Icon(Icons.delete_sweep_outlined), title: const Text('清除浏览数据'), onTap: () async { Navigator.pop(sheetContext); await WebViewCookieManager().clearCookies(); }),
+          ListTile(leading: const Icon(Icons.open_in_browser_rounded), title: const Text('使用 Firefox / 系统浏览器打开'), subtitle: const Text('外部浏览器流量不支持内置自捕获'), onTap: () async { Navigator.pop(sheetContext); await _openExternalBrowser(); }),
+          ListTile(leading: const Icon(Icons.delete_sweep_outlined), title: const Text('清除 Firefox 浏览数据'), onTap: () async { Navigator.pop(sheetContext); await _geckoController.clearData(); if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Firefox Cookie、缓存和站点数据已清除'))); }),
         ]),
       ),
     );
   }
 
-  void _goHome() => _controller.loadRequest(Uri.parse(_homeUrl));
+  Future<void> _openExternalBrowser() async {
+    final url = _normalizeAddress(_addressController.text);
+    final opened = await launchUrl(url, mode: LaunchMode.externalApplication);
+    if (!opened && mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('未找到可用的外部浏览器，请先安装 Firefox 或设置默认浏览器。')));
+  }
+
+  void _goHome() => _geckoController.loadUrl(_homeUrl);
 
   void _addBookmark() {
     final url = _addressController.text.trim();
@@ -171,7 +225,7 @@ class _ProxyPinBrowserPageState extends State<ProxyPinBrowserPage> {
             ? const Padding(padding: EdgeInsets.all(24), child: Center(child: Text('暂无书签，先收藏当前页面吧')))
             : ListView(shrinkWrap: true, children: _bookmarks.map((url) => ListTile(
                 leading: const Icon(Icons.bookmark), title: Text(url, maxLines: 2, overflow: TextOverflow.ellipsis),
-                onTap: () { Navigator.pop(sheetContext); _controller.loadRequest(Uri.parse(url)); },
+                onTap: () { Navigator.pop(sheetContext); _geckoController.loadUrl(url); },
                 trailing: IconButton(icon: const Icon(Icons.delete_outline), onPressed: () { setState(() => _bookmarks.remove(url)); Navigator.pop(sheetContext); _openBookmarks(); },),
               )).toList()),
       ),
@@ -188,7 +242,7 @@ class _ProxyPinBrowserPageState extends State<ProxyPinBrowserPage> {
           ..._tabs.asMap().entries.map((entry) => ListTile(
             leading: Icon(entry.key == _tabs.length - 1 ? Icons.check_circle : Icons.tab_outlined),
             title: Text(entry.value, maxLines: 2, overflow: TextOverflow.ellipsis),
-            onTap: () { Navigator.pop(sheetContext); _controller.loadRequest(Uri.parse(entry.value)); },
+            onTap: () { Navigator.pop(sheetContext); _geckoController.loadUrl(entry.value); },
           )),
         ]),
       ),
@@ -197,7 +251,7 @@ class _ProxyPinBrowserPageState extends State<ProxyPinBrowserPage> {
 
   void _newTab() {
     setState(() => _tabs.add(_homeUrl));
-    _controller.loadRequest(Uri.parse(_homeUrl));
+    _geckoController.loadUrl(_homeUrl);
   }
 
   void _openProxy() async {
@@ -228,13 +282,13 @@ class _ProxyPinBrowserPageState extends State<ProxyPinBrowserPage> {
           decoration: const InputDecoration(border: InputBorder.none, prefixIcon: Icon(Icons.lock_outline, size: 17), hintText: '搜索或输入网址', contentPadding: EdgeInsets.symmetric(vertical: 9)),
         )),
         actions: [
-          IconButton(tooltip: '返回', icon: const Icon(Icons.chevron_left), onPressed: () async { if (await _controller.canGoBack()) _controller.goBack(); }),
-          IconButton(tooltip: '前进', icon: const Icon(Icons.chevron_right), onPressed: () async { if (await _controller.canGoForward()) _controller.goForward(); }),
+          IconButton(tooltip: '返回', icon: const Icon(Icons.chevron_left), onPressed: _geckoController.goBack),
+          IconButton(tooltip: '前进', icon: const Icon(Icons.chevron_right), onPressed: _geckoController.goForward),
           IconButton(tooltip: '更多', icon: const Icon(Icons.more_horiz), onPressed: _showBrowserMenu),
         ],
         bottom: _loading ? PreferredSize(preferredSize: const Size.fromHeight(2), child: LinearProgressIndicator(value: _progress == 0 ? null : _progress / 100)) : null,
       ),
-      body: Stack(children: [WebViewWidget(controller: _controller), Positioned(right: 18, bottom: 22, child: FloatingActionButton.small(heroTag: 'browser-ai-fab', tooltip: 'AI 分析当前抓包', onPressed: _openAi, child: const Icon(Icons.auto_awesome_rounded)))]),
+      body: Stack(children: [GeckoBrowserView(controller: _geckoController, initialUrl: _homeUrl), Positioned(right: 18, bottom: 22, child: FloatingActionButton.small(heroTag: 'browser-ai-fab', tooltip: 'AI 分析当前抓包', onPressed: _openAi, child: const Icon(Icons.auto_awesome_rounded)))]),
       bottomNavigationBar: SafeArea(top: false, child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [
         IconButton(tooltip: '主页', icon: const Icon(Icons.home_outlined), onPressed: _goHome),
         IconButton(tooltip: '标签页', icon: const Icon(Icons.tab_outlined), onPressed: _openTabs),
