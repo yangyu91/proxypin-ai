@@ -31,7 +31,10 @@ class _ProxyPinBrowserPageState extends State<ProxyPinBrowserPage> {
   static const _homeUrl = 'https://www.baidu.com/';
   late final GeckoBrowserController _geckoController;
   late final StreamSubscription<GeckoBrowserEvent> _geckoEventSubscription;
-  late final int _localProxyPort;
+  int _localProxyPort = 9099;
+  bool _browserViewEnabled = false;
+  String? _browserError;
+  String? _browserNotice;
   final _addressController = TextEditingController(text: _homeUrl);
   final _bookmarks = <String>[];
   final _tabs = <String>[_homeUrl];
@@ -49,13 +52,9 @@ class _ProxyPinBrowserPageState extends State<ProxyPinBrowserPage> {
   @override
   void initState() {
     super.initState();
-    final server = ProxyServer.current;
-    // GeckoRuntime 仅在首次创建时读取代理端口；从此处起锁定本机监听端口，
-    // 端口修改控件会要求完整重启应用后再生效。
-    server?.reserveEmbeddedFirefoxProxyPort();
-    _localProxyPort = server?.embeddedFirefoxProxyPort ?? 9099;
     _geckoController = GeckoBrowserController();
     _geckoEventSubscription = _geckoController.events.listen(_onGeckoEvent);
+    _prepareFirefoxBrowser();
     _ensureCapturePipeline();
     _refreshProxyStatus();
     _proxyStatusTimer = Timer.periodic(const Duration(seconds: 2), (_) => _refreshProxyStatus());
@@ -68,6 +67,78 @@ class _ProxyPinBrowserPageState extends State<ProxyPinBrowserPage> {
     _geckoController.dispose();
     _addressController.dispose();
     super.dispose();
+  }
+
+  Future<void> _prepareFirefoxBrowser() async {
+    if (mounted) {
+      setState(() {
+        _browserViewEnabled = false;
+        _browserError = null;
+      });
+    }
+
+    final server = ProxyServer.current;
+    if (server == null) {
+      if (mounted) setState(() => _browserError = '本机抓包服务尚未创建，无法启动 Firefox 浏览器。');
+      return;
+    }
+
+    // 移动首页会异步启动 ProxyServer。先等待其绑定；若启动过程中出现异常，
+    // 再主动尝试启动并把明确原因显示给用户，而不是创建一个指向空端口的 GeckoView。
+    for (var attempt = 0; attempt < 20 && !server.isRunning; attempt++) {
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+    }
+    if (!server.isRunning) {
+      try {
+        await server.start();
+      } catch (error) {
+        if (mounted) {
+          setState(() => _browserError = '本机抓包服务启动失败：$error');
+        }
+        return;
+      }
+    }
+    if (!server.isRunning) {
+      if (mounted) setState(() => _browserError = '本机抓包服务未监听成功，请检查端口或点击重试。');
+      return;
+    }
+
+    // 若上次选择的外部节点只是 TCP 端口可达、但并不支持 HTTP CONNECT，Firefox
+    // 会把每个导航都级联到该节点并在数秒后失败。启动前做一次真实握手验证；
+    // 失败时保留节点信息但停用它，让浏览器安全回退到本机 MITM 的直连路径。
+    final externalProxy = server.configuration.externalProxy;
+    if (externalProxy?.enabled == true && externalProxy?.host != null && externalProxy?.port != null) {
+      final latency = await SubscriptionManager.instance.testHttpProxyEndpoint(
+        externalProxy!.host!,
+        externalProxy.port!,
+        username: externalProxy.username,
+        password: externalProxy.password,
+        timeout: const Duration(seconds: 4),
+      );
+      if (latency == null) {
+        externalProxy.enabled = false;
+        await server.configuration.flushConfig();
+        _browserNotice = '已选外部节点无法完成 HTTPS 代理握手，浏览器已自动切换为直连抓包。';
+      }
+    }
+
+    // GeckoRuntime 仅在首次创建时读取代理端口；从此处起锁定本机监听端口，
+    // 端口修改控件会要求完整重启应用后再生效。
+    if (!server.reserveEmbeddedFirefoxProxyPort()) {
+      if (mounted) {
+        setState(() => _browserError = 'Firefox 已使用端口 ${server.embeddedFirefoxProxyPort} 启动；修改代理端口后请重启应用。');
+      }
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      _localProxyPort = server.embeddedFirefoxProxyPort;
+      _browserViewEnabled = true;
+    });
+    final notice = _browserNotice;
+    if (notice != null && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(notice)));
+    }
   }
 
   Future<void> _ensureCapturePipeline() async {
@@ -124,8 +195,18 @@ class _ProxyPinBrowserPageState extends State<ProxyPinBrowserPage> {
     final url = event.payload['url']?.toString() ?? '';
     switch (event.type) {
       case 'ready':
+        if (mounted && _browserError != null) setState(() => _browserError = null);
         if (url.isNotEmpty && _activeBrowserRequest == null) {
           _onGeckoEvent(GeckoBrowserEvent(type: 'pageStart', payload: {'url': url}));
+        }
+        break;
+      case 'error':
+        final message = event.payload['message']?.toString() ?? 'Firefox 浏览器初始化失败';
+        if (mounted) {
+          setState(() {
+            _browserViewEnabled = false;
+            _browserError = message;
+          });
         }
         break;
       case 'pageStart':
@@ -199,7 +280,7 @@ class _ProxyPinBrowserPageState extends State<ProxyPinBrowserPage> {
   Future<void> _refreshProxyStatus() async {
     final running = await AndroidVpnController.isRunning();
     final config = await Configuration.instance;
-    final proxy = config.externalProxy;
+    final proxy = config.externalProxy?.enabled == true ? config.externalProxy : null;
     final proxyHost = proxy?.host;
     final proxyPort = proxy?.port;
     ProxyNode? matchingNode;
@@ -249,6 +330,10 @@ class _ProxyPinBrowserPageState extends State<ProxyPinBrowserPage> {
   }
 
   Future<void> _openAddress() async {
+    if (!_browserViewEnabled) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_browserError ?? 'Firefox 浏览器尚未就绪，请稍候或点击重试。')));
+      return;
+    }
     final raw = _addressController.text.trim();
     if (raw.isEmpty) return;
     final target = _normalizeAddress(raw);
@@ -388,6 +473,28 @@ class _ProxyPinBrowserPageState extends State<ProxyPinBrowserPage> {
     );
   }
 
+  Widget _buildBrowserUnavailable() {
+    final scheme = Theme.of(context).colorScheme;
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(28),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Icon(Icons.language_outlined, size: 52, color: scheme.error),
+          const SizedBox(height: 14),
+          Text('Firefox 浏览器暂不可用', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 8),
+          Text(_browserError ?? '正在等待本机抓包服务就绪…', textAlign: TextAlign.center),
+          const SizedBox(height: 16),
+          FilledButton.icon(
+            onPressed: _prepareFirefoxBrowser,
+            icon: const Icon(Icons.refresh),
+            label: const Text('重试启动浏览器'),
+          ),
+        ]),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -407,7 +514,10 @@ class _ProxyPinBrowserPageState extends State<ProxyPinBrowserPage> {
         bottom: _loading ? PreferredSize(preferredSize: const Size.fromHeight(2), child: LinearProgressIndicator(value: _progress == 0 ? null : _progress / 100)) : null,
       ),
       body: Stack(children: [
-        GeckoBrowserView(controller: _geckoController, initialUrl: _homeUrl, localProxyPort: _localProxyPort),
+        if (_browserViewEnabled)
+          GeckoBrowserView(controller: _geckoController, initialUrl: _homeUrl, localProxyPort: _localProxyPort)
+        else
+          _buildBrowserUnavailable(),
         Positioned(
           left: 12,
           bottom: 22,

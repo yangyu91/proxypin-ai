@@ -38,12 +38,11 @@ class _ProxySubscriptionsPageState extends State<ProxySubscriptionsPage> {
   Future<void> _autoConnectFastest() async {
     final nodes = _manager.groups.expand((group) => group.nodes).where((node) => node.enabled && node.scheme == 'http').toList();
     if (nodes.isEmpty) return;
-    var candidates = nodes.where((node) => node.latencyMs != null && node.latencyMs! >= 0).toList();
-    if (candidates.isEmpty) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('正在测速可用代理节点…')));
-      await Future.wait(nodes.map((node) => _manager.testLatency(node, timeout: const Duration(seconds: 3))));
-      candidates = nodes.where((node) => node.latencyMs != null && node.latencyMs! >= 0).toList();
-    }
+    // 已缓存的“端口可达”延迟不足以证明节点可代理 HTTPS；每次自动连接前
+    // 都重新完成 HTTP CONNECT 验证，避免失效节点让 Firefox 全部导航超时。
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('正在验证可用代理节点…')));
+    await Future.wait(nodes.map((node) => _manager.testLatency(node, timeout: const Duration(seconds: 4))));
+    final candidates = nodes.where((node) => node.latencyMs != null && node.latencyMs! >= 0).toList();
     if (candidates.isEmpty) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('没有检测到可用于 HTTPS 解密链路的 HTTP 节点')));
       return;
@@ -78,6 +77,13 @@ class _ProxySubscriptionsPageState extends State<ProxySubscriptionsPage> {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('该节点需要 Xray/V2Ray 或 SOCKS 核心；当前 HTTPS 解密级联仅支持 HTTP 代理节点')));
       return;
     }
+    // 连接按钮也必须复验完整 HTTP CONNECT，而不能相信旧的 TCP 延迟记录。
+    final latency = await _manager.testLatency(node, timeout: const Duration(seconds: 4));
+    if (latency == null) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('该节点无法完成 HTTPS 代理握手，未连接；浏览器将保持直连抓包。')));
+      return;
+    }
+
     final proxyServer = ProxyServer.current;
     if (proxyServer == null || !proxyServer.isRunning) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('本地抓包服务未启动，无法建立 Firefox → 本地 MITM → 外部节点链路')));

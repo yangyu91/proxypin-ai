@@ -17,6 +17,7 @@ import com.network.proxy.vpn.util.PacketUtil.isPacketCorrupted
 import com.network.proxy.vpn.util.ProcessInfoManager
 import com.network.proxy.vpn.util.TLS.isTLSClientHello
 import java.io.IOException
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.nio.ByteBuffer
 import java.nio.channels.SelectionKey

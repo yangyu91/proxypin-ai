@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -105,22 +106,88 @@ class SubscriptionManager {
   }
 
   Future<List<int?>> testGroup(ProxyGroup group, {Duration timeout = const Duration(seconds: 5)}) async {
-    // 导入后默认对整组节点并发 TCP 探测；这里测的是节点端口可达性，不等同于完整代理协议握手。
+    // HTTP 节点必须完成 CONNECT 握手才可用于 Firefox → MITM 级联；单纯 TCP
+    // 端口可连接不足以说明它是一个可工作的代理。其他协议节点暂只探测端口。
     return Future.wait(group.nodes.map((node) => testLatency(node, timeout: timeout)));
   }
 
   Future<int?> testLatency(ProxyNode node, {Duration timeout = const Duration(seconds: 5)}) async {
     final stopwatch = Stopwatch()..start();
+    Socket? socket;
     try {
-      final socket = await Socket.connect(node.address, node.port, timeout: timeout);
-      await socket.close();
+      socket = await Socket.connect(node.address, node.port, timeout: timeout);
+      if (node.scheme == 'http') {
+        await _verifyHttpConnectProxy(socket, username: _nodeUsername(node), password: _nodePassword(node), timeout: timeout);
+      }
       node.latencyMs = stopwatch.elapsedMilliseconds;
-      await save();
       return node.latencyMs;
     } catch (_) {
       node.latencyMs = null;
-      await save();
       return null;
+    } finally {
+      socket?.destroy();
+      await save();
+    }
+  }
+
+  String? _nodeUsername(ProxyNode node) {
+    final userInfo = node.settings['userInfo']?.toString() ?? '';
+    if (userInfo.isEmpty) return null;
+    return Uri.decodeComponent(userInfo.split(':').first);
+  }
+
+  String? _nodePassword(ProxyNode node) {
+    final userInfo = node.settings['userInfo']?.toString() ?? '';
+    final separator = userInfo.indexOf(':');
+    if (separator < 0) return null;
+    return Uri.decodeComponent(userInfo.substring(separator + 1));
+  }
+
+  /// 验证一个 HTTP 代理能否真正完成 HTTPS CONNECT，而非仅检查 TCP 端口。
+  /// 返回端到端握手延迟；返回 null 表示节点不可用于 Firefox/MITM 级联。
+  Future<int?> testHttpProxyEndpoint(
+    String host,
+    int port, {
+    String? username,
+    String? password,
+    Duration timeout = const Duration(seconds: 5),
+  }) async {
+    final stopwatch = Stopwatch()..start();
+    Socket? socket;
+    try {
+      socket = await Socket.connect(host, port, timeout: timeout);
+      await _verifyHttpConnectProxy(socket, username: username, password: password, timeout: timeout);
+      return stopwatch.elapsedMilliseconds;
+    } catch (_) {
+      return null;
+    } finally {
+      socket?.destroy();
+    }
+  }
+
+  Future<void> _verifyHttpConnectProxy(
+    Socket socket, {
+    String? username,
+    String? password,
+    required Duration timeout,
+  }) async {
+    final crlf = String.fromCharCode(13) + String.fromCharCode(10);
+    final credentials = username == null && password == null ? null : '${username ?? ''}:${password ?? ''}';
+    final authorization = credentials == null ? '' : 'Proxy-Authorization: Basic ${base64Encode(utf8.encode(credentials))}$crlf';
+    socket.write(
+      'CONNECT detectportal.firefox.com:443 HTTP/1.1$crlf'
+      'Host: detectportal.firefox.com:443$crlf'
+      '$authorization'
+      'Connection: close$crlf$crlf',
+    );
+    await socket.flush();
+    final firstLine = await socket
+        .transform(utf8.decoder)
+        .transform(const LineSplitter())
+        .first
+        .timeout(timeout);
+    if (!firstLine.startsWith('HTTP/1.1 200') && !firstLine.startsWith('HTTP/1.0 200')) {
+      throw HttpException('HTTP 代理 CONNECT 验证失败：$firstLine');
     }
   }
 }

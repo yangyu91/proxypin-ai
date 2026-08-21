@@ -1,6 +1,7 @@
 /// AI 对话面板 + 抓包数据序列化。
 library;
 
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:file_picker/file_picker.dart';
@@ -13,6 +14,7 @@ import 'package:proxypin_ai/ai/builtin_skills.dart';
 import 'package:proxypin_ai/ai/ai_conversation_store.dart';
 import 'package:proxypin_ai/ai/ai_workspace.dart';
 import 'package:proxypin_ai/ai/ai_provider.dart';
+import 'package:proxypin_ai/ai/deepseek_client.dart';
 import 'package:proxypin_ai/ai/login_webview.dart';
 import 'package:proxypin_ai/network/http/http.dart';
 import 'package:proxypin_ai/network/http/http_client.dart';
@@ -99,6 +101,8 @@ class _AiChatPanelState extends State<AiChatPanel> {
   bool _confirmActions = true;
   bool _sending = false;
   bool _configured = false;
+  bool _validatingDeepSeek = false;
+  String? _deepSeekAuthStatus;
 
   @override
   void initState() {
@@ -131,14 +135,63 @@ class _AiChatPanelState extends State<AiChatPanel> {
       _memory = memory;
       _includeSensitive = includeSensitive;
       _confirmActions = confirmActions;
-      _configured = type == AiProviderType.deepSeekWeb ? _token.isNotEmpty : _apiKey.isNotEmpty;
+      // DeepSeek 网页 Token 必须通过真实会话接口验证；仅凭本地字符串非空会让
+      // 登录页与工作台给出相互矛盾的“已登录”判断。
+      _configured = type == AiProviderType.deepSeekWeb ? false : _apiKey.isNotEmpty;
+      _deepSeekAuthStatus = type == AiProviderType.deepSeekWeb && _token.isNotEmpty ? '正在验证已保存的 DeepSeek Token…' : null;
       _conversation = _conversationStore.active ?? _conversationStore.create(provider: type);
       _entries
         ..clear()
         ..addAll(_conversation!.messages.map((message) => ChatEntry(role: message.role, content: message.content)));
     });
-    if (_configured) {
+    if (type == AiProviderType.deepSeekWeb && token != null && token.isNotEmpty) {
+      unawaited(_validateAndActivateDeepSeekToken(token, clearSavedOnFailure: true));
+    } else if (_configured) {
       _buildProvider();
+    }
+  }
+
+  Future<bool> _validateAndActivateDeepSeekToken(
+    String token, {
+    required bool clearSavedOnFailure,
+  }) async {
+    if (mounted) {
+      setState(() {
+        _validatingDeepSeek = true;
+        _configured = false;
+        _deepSeekAuthStatus = '正在验证 DeepSeek 登录态…';
+      });
+    }
+
+    final client = DeepSeekWebClient(token);
+    try {
+      await client.createChatSession();
+      await AiConfig.saveToken(token);
+      await AiConfig.saveProviderType(AiProviderType.deepSeekWeb);
+      if (!mounted) return true;
+      setState(() {
+        _token = token;
+        _providerType = AiProviderType.deepSeekWeb;
+        _configured = true;
+        _validatingDeepSeek = false;
+        _deepSeekAuthStatus = 'DeepSeek 登录态已验证';
+      });
+      _buildProvider();
+      return true;
+    } catch (error) {
+      if (clearSavedOnFailure) await AiConfig.clearWebLoginState();
+      if (!mounted) return false;
+      _provider?.dispose();
+      _provider = null;
+      setState(() {
+        if (clearSavedOnFailure) _token = '';
+        _configured = false;
+        _validatingDeepSeek = false;
+        _deepSeekAuthStatus = 'DeepSeek Token 无效或已过期：$error';
+      });
+      return false;
+    } finally {
+      client.dispose();
     }
   }
 
@@ -303,14 +356,10 @@ class _AiChatPanelState extends State<AiChatPanel> {
       )),
     );
     if (token != null && token.isNotEmpty) {
-      await AiConfig.saveToken(token);
-      await AiConfig.saveProviderType(AiProviderType.deepSeekWeb);
-      setState(() {
-        _token = token;
-        _providerType = AiProviderType.deepSeekWeb;
-        _configured = true;
-      });
-      _buildProvider();
+      final valid = await _validateAndActivateDeepSeekToken(token, clearSavedOnFailure: false);
+      if (!valid && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Token 未通过 DeepSeek 验证，未保存。请重新登录或手动粘贴新的 Token。')));
+      }
     }
   }
 
@@ -323,6 +372,8 @@ class _AiChatPanelState extends State<AiChatPanel> {
       _token = '';
       _providerType = AiProviderType.deepSeekWeb;
       _configured = false;
+      _validatingDeepSeek = false;
+      _deepSeekAuthStatus = 'DeepSeek 登录态已重置';
     });
   }
 
@@ -418,9 +469,16 @@ class _AiChatPanelState extends State<AiChatPanel> {
                   _skills = skills;
                   _includeSensitive = includeSensitive;
                   _confirmActions = confirmActions;
-                  _configured = provider == AiProviderType.deepSeekWeb ? _token.isNotEmpty : key.isNotEmpty;
+                  _configured = provider == AiProviderType.deepSeekWeb ? false : key.isNotEmpty;
+                  _deepSeekAuthStatus = provider == AiProviderType.deepSeekWeb && _token.isNotEmpty
+                      ? '正在验证 DeepSeek Token…'
+                      : null;
                 });
-                if (_configured) _buildProvider();
+                if (provider == AiProviderType.deepSeekWeb && _token.isNotEmpty) {
+                  unawaited(_validateAndActivateDeepSeekToken(_token, clearSavedOnFailure: true));
+                } else if (_configured) {
+                  _buildProvider();
+                }
                 if (ctx.mounted) Navigator.pop(ctx);
               },
               child: const Text('保存设置'),
@@ -544,7 +602,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
                 Text('AI 分析', style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
                 const SizedBox(height: 2),
                 Text(
-                  _configured ? providerName : '未配置 AI 服务',
+                  _configured ? providerName : (_deepSeekAuthStatus ?? '未配置 AI 服务'),
                   style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                 ),
               ],
@@ -581,17 +639,18 @@ class _AiChatPanelState extends State<AiChatPanel> {
               Text('开始使用 AI 分析', style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
               const SizedBox(height: 7),
               Text(
-                '登录 DeepSeek，或配置官方 API Key，即可让 AI 读取当前抓包数据。',
+                _deepSeekAuthStatus ?? '登录 DeepSeek，或配置官方 API Key，即可让 AI 读取当前抓包数据。',
                 textAlign: TextAlign.center,
                 style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant, height: 1.45),
               ),
+              if (_validatingDeepSeek) const Padding(padding: EdgeInsets.only(top: 12), child: LinearProgressIndicator()),
               const SizedBox(height: 18),
               SizedBox(
                 width: double.infinity,
                 child: FilledButton.icon(
                   icon: const Icon(Icons.login_rounded, size: 18),
                   label: const Text('登录 DeepSeek 网页版'),
-                  onPressed: _openLogin,
+                  onPressed: _validatingDeepSeek ? null : _openLogin,
                 ),
               ),
               const SizedBox(height: 8),

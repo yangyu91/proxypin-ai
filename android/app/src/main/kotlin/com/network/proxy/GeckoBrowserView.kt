@@ -88,6 +88,8 @@ private class GeckoBrowserView(
     private var eventSink: EventChannel.EventSink? = null
     private var currentUrl: String = params["initialUrl"]?.toString() ?: "https://www.baidu.com/"
     private val localProxyPort: Int = (params["localProxyPort"] as? Number)?.toInt() ?: 9099
+    private var sessionOpened = false
+    private var startupError: String? = null
 
     init {
         methodChannel.setMethodCallHandler(this)
@@ -125,9 +127,15 @@ private class GeckoBrowserView(
             }
         })
 
-        session.open(GeckoRuntimeHolder.get(context, localProxyPort))
-        geckoView.setSession(session)
-        session.loadUri(currentUrl)
+        try {
+            session.open(GeckoRuntimeHolder.get(context, localProxyPort))
+            sessionOpened = true
+            geckoView.setSession(session)
+            session.loadUri(currentUrl)
+        } catch (error: Exception) {
+            startupError = "Firefox GeckoView 初始化失败：${error.message ?: error.javaClass.simpleName}"
+            Log.e("GeckoBrowserView", startupError!!, error)
+        }
     }
 
     override fun getView(): View = geckoView
@@ -136,10 +144,17 @@ private class GeckoBrowserView(
         eventSink = null
         eventChannel.setStreamHandler(null)
         methodChannel.setMethodCallHandler(null)
-        session.close()
+        if (sessionOpened) {
+            session.close()
+            sessionOpened = false
+        }
     }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
+        if (!sessionOpened) {
+            result.error("gecko_unavailable", startupError ?: "Firefox GeckoView 尚未就绪", null)
+            return
+        }
         when (call.method) {
             "loadUrl" -> {
                 val url = call.argument<String>("url")
@@ -181,6 +196,11 @@ private class GeckoBrowserView(
 
     override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
         eventSink = events
+        val error = startupError
+        if (error != null) {
+            emit("error", mapOf("message" to error, "localProxyPort" to localProxyPort))
+            return
+        }
         emit("ready", mapOf("url" to currentUrl, "engine" to "Firefox GeckoView", "localProxyPort" to localProxyPort, "enterpriseRootsEnabled" to true))
     }
 
