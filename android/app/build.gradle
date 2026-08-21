@@ -65,7 +65,7 @@ android {
         applicationId "com.network.proxy"
         ndk { abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86_64' }
         // For more information, see: https://docs.flutter.dev/deployment/android#reviewing-the-gradle-build-configuration.
-        // GeckoView 148 官方最低要求 Android 8.0 / API 26；不使用 overrideLibrary 强行兼容，避免旧系统运行时崩溃。
+        // GeckoView 141 官方最低要求 Android 8.0 / API 26；不使用 overrideLibrary 强行兼容，避免旧系统运行时崩溃。
         minSdkVersion 26
         targetSdkVersion flutter.targetSdkVersion
         multiDexEnabled true
@@ -121,7 +121,7 @@ android.applicationVariants.all { variant ->
 
 dependencies {
     // Mozilla Firefox 浏览器内核，供内置 GeckoView 浏览器使用。
-    // 148.x 使用 AndroidX Core 1.17，兼容当前 AGP 8.9 / compileSdk 36；
-    // 仍支持 GeckoRuntimeSettings.enterpriseRootsEnabled 与 configFilePath。
-    implementation 'org.mozilla.geckoview:geckoview:148.0.20260309125808'
+    // 141.x 使用 Kotlin 2.1.x 与 AndroidX Core 1.16，兼容当前 Kotlin/AGP 工具链和 compileSdk 36；
+    // 同时保留 GeckoRuntimeSettings.enterpriseRootsEnabled 与 configFilePath。
+    implementation 'org.mozilla.geckoview:geckoview:141.0.20250806102122'
 }

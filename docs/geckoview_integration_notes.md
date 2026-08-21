@@ -63,4 +63,4 @@ Mozilla 将可编程 Gecko 偏好归类为自动化/调试能力，并提醒自�
 
 ## Android 版本兼容性
 
-当前选用的 GeckoView `148.0.20260309125808` 在其 AndroidManifest 中声明 `minSdkVersion=26`。因此，使用 Firefox 内核的 Android 构建必须将最低系统版本设为 Android 8.0（API 26）；不能用 Manifest `overrideLibrary` 绕过该声明，否则旧版 Android 会因 GeckoView 所调用的 API 缺失而面临运行时失败。
+当前选用的 GeckoView `141.0.20250806102122` 在其 AndroidManifest 中声明 `minSdkVersion=26`。因此，使用 Firefox 内核的 Android 构建必须将最低系统版本设为 Android 8.0（API 26）；不能用 Manifest `overrideLibrary` 绕过该声明，否则旧版 Android 会因 GeckoView 所调用的 API 缺失而面临运行时失败。版本选择保持在 GeckoView 141.x，是因为该版本依赖 Kotlin 2.1.x，与当前 Kotlin Gradle Plugin 2.1 工具链兼容；更高版本引入 Kotlin 2.2/2.3 元数据，要求同步升级 Android 构建工具。
