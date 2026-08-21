@@ -17,7 +17,6 @@ import com.network.proxy.vpn.util.PacketUtil.isPacketCorrupted
 import com.network.proxy.vpn.util.ProcessInfoManager
 import com.network.proxy.vpn.util.TLS.isTLSClientHello
 import java.io.IOException
-import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.nio.ByteBuffer
 import java.nio.channels.SelectionKey
@@ -153,60 +152,44 @@ class ConnectionHandler(
     }
 
     /**
-     * 检查是否应该绕过代理
-     * 支持 CIDR 格式（如 192.168.0.0/16）、IP地址、localhost 和域名（带通配符）匹配
+     * 检查是否应该绕过代理。
+     *
+     * TUN 层在此处只有已解析的 IPv4 目标地址，不保留原始域名或 TLS SNI。因此只能
+     * 安全地匹配 IPv4、IPv4 CIDR 和 localhost；域名及通配符规则需要 DNS 层拦截，
+     * 不能在 NIO 数据包线程中通过 DNS 反查来伪造匹配结果。后者不仅无法覆盖 CDN
+     * 轮换地址，还会阻塞转发线程并导致连接卡顿。
      */
     private fun shouldBypassProxy(destinationIP: String): Boolean {
         val proxyPassDomains = manager.proxyPassDomains ?: return false
 
-        for (domain in proxyPassDomains) {
-            try {
-                val trimmedDomain = domain.trim()
+        for (rule in proxyPassDomains) {
+            val value = rule.trim().lowercase()
+            if (value.isEmpty()) continue
 
-                // 处理 localhost
-                if (trimmedDomain == "localhost" && (destinationIP == "127.0.0.1" || destinationIP == "localhost")) {
-                    return true
+            when {
+                value == "localhost" -> {
+                    if (destinationIP == "127.0.0.1") return true
                 }
-
-                // 处理 CIDR 格式，如 192.168.0.0/16
-                if (trimmedDomain.contains("/")) {
-                    if (matchesCIDR(destinationIP, trimmedDomain)) {
-                        return true
-                    }
-                } else if (trimmedDomain.startsWith("*.")) {
-                    // 支持通配符匹配，如 *.example.com
-                    val suffix = trimmedDomain.substring(1) // 去掉 *
-                    if (destinationIP.endsWith(suffix)) {
-                        return true
-                    }
-                } else if (trimmedDomain.contains("*")) {
-                    // 支持其他通配符模式
-                    val pattern = trimmedDomain.replace(".", "\\.").replace("*", ".*")
-                    if (destinationIP.matches(Regex(pattern))) {
-                        return true
-                    }
-                } else {
-                    // 精确匹配 IP 或域名
-                    if (destinationIP == trimmedDomain) {
-                        return true
-                    }
-
-                    // 尝试解析域名为IP地址进行比较
-                    try {
-                        val address = InetAddress.getByName(trimmedDomain)
-                        if (address.hostAddress == destinationIP) {
-                            return true
-                        }
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Error resolving domain $trimmedDomain: ${e.message}")
-                    }
+                value.contains("/") -> {
+                    // 仅处理格式正确的 IPv4 CIDR；域名/通配符规则在 TUN 层没有可比对对象。
+                    val network = value.substringBefore('/')
+                    if (isIpv4Literal(network) && matchesCIDR(destinationIP, value)) return true
                 }
-            } catch (e: Exception) {
-                Log.w(TAG, "Error matching domain $domain: ${e.message}")
+                isIpv4Literal(value) -> {
+                    if (destinationIP == value) return true
+                }
             }
         }
 
         return false
+    }
+
+    private fun isIpv4Literal(value: String): Boolean {
+        val parts = value.split('.')
+        return parts.size == 4 && parts.all { part ->
+            val octet = part.toIntOrNull()
+            octet != null && octet in 0..255
+        }
     }
 
     /**
@@ -222,6 +205,7 @@ class ConnectionHandler(
 
             val networkAddress = parts[0]
             val prefixLength = parts[1].toIntOrNull() ?: return false
+            if (prefixLength !in 0..32) return false
 
             val ipBytes = ipToBytes(ip)
             val networkBytes = ipToBytes(networkAddress)
@@ -249,10 +233,10 @@ class ConnectionHandler(
         try {
             val parts = ip.split(".")
             if (parts.size != 4) return null
+            val octets = parts.map { it.toIntOrNull() ?: return null }
+            if (octets.any { it !in 0..255 }) return null
 
-            return ByteArray(4) { i ->
-                parts[i].toInt().toByte()
-            }
+            return ByteArray(4) { i -> octets[i].toByte() }
         } catch (_: Exception) {
             return null
         }
@@ -298,8 +282,14 @@ class ConnectionHandler(
 
                 //any data from client?
                 if (dataLength > 0) {
-                    //init proxy
-                    initProxyConnect(clientPacketData, destinationIP, destinationPort, connection)
+                    // init proxy。连接失败时立即复位并移除会话，不能继续把数据写入
+                    // 半初始化或已关闭的 SocketChannel。
+                    if (!initProxyConnect(clientPacketData, destinationIP, destinationPort, connection)) {
+                        connection.isAbortingConnection = true
+                        manager.closeConnection(connection)
+                        sendRstPacket(ip4Header, tcpHeader, dataLength)
+                        return
+                    }
 
                     //accumulate data from client
                     if (connection.recSequence == 0L || tcpHeader.sequenceNumber >= connection.recSequence) {
@@ -370,17 +360,17 @@ class ConnectionHandler(
     private fun initProxyConnect(
         clientPacketData: ByteBuffer, destinationIP: Int, destinationPort: Int,
         connection: Connection
-    ) {
+    ): Boolean {
         if (connection.isInitConnect) {
-            return
+            return true
         }
 
-        connection.isInitConnect = true
-        val proxyAddress =
-            getProxyAddress(clientPacketData, destinationIP, destinationPort)
+        val proxyAddress = getProxyAddress(clientPacketData, destinationIP, destinationPort)
         try {
-            val channel = connection.channel as SocketChannel?
-            val connected = channel!!.connect(proxyAddress)
+            val channel = connection.channel as? SocketChannel
+                ?: throw IOException("TCP connection has no SocketChannel")
+            connection.isInitConnect = true
+            val connected = channel.connect(proxyAddress)
             connection.isConnected = connected
             nioService.registerSession(connection)
 
@@ -392,9 +382,15 @@ class ConnectionHandler(
                     "Proxy Initiate connecting key:" + connection.toString() + " " + channel.localAddress + " to remote tcp server: " + channel.remoteAddress
                 )
             }
+            return true
         } catch (e: Exception) {
+            // connect()/register 失败后必须恢复初始化状态；否则后续数据包会直接 return，
+            // 该 TUN TCP 会话将永久卡在半初始化状态。
+            connection.isInitConnect = false
+            connection.isConnected = false
             val ips = intToIPAddress(destinationIP)
-            Log.w(TAG, "Failed to reconnect to $ips:$destinationPort", e)
+            Log.w(TAG, "Failed to connect to $ips:$destinationPort", e)
+            return false
         }
     }
 

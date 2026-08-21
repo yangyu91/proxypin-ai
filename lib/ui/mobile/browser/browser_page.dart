@@ -31,9 +31,11 @@ class _ProxyPinBrowserPageState extends State<ProxyPinBrowserPage> {
   static const _homeUrl = 'https://www.baidu.com/';
   late final GeckoBrowserController _geckoController;
   late final StreamSubscription<GeckoBrowserEvent> _geckoEventSubscription;
+  late final int _localProxyPort;
   final _addressController = TextEditingController(text: _homeUrl);
   final _bookmarks = <String>[];
   final _tabs = <String>[_homeUrl];
+  int _activeTabIndex = 0;
   Timer? _proxyStatusTimer;
   bool _loading = true;
   bool _vpnRunning = false;
@@ -47,6 +49,11 @@ class _ProxyPinBrowserPageState extends State<ProxyPinBrowserPage> {
   @override
   void initState() {
     super.initState();
+    final server = ProxyServer.current;
+    // GeckoRuntime 仅在首次创建时读取代理端口；从此处起锁定本机监听端口，
+    // 端口修改控件会要求完整重启应用后再生效。
+    server?.reserveEmbeddedFirefoxProxyPort();
+    _localProxyPort = server?.embeddedFirefoxProxyPort ?? 9099;
     _geckoController = GeckoBrowserController();
     _geckoEventSubscription = _geckoController.events.listen(_onGeckoEvent);
     _ensureCapturePipeline();
@@ -141,8 +148,14 @@ class _ProxyPinBrowserPageState extends State<ProxyPinBrowserPage> {
         setState(() {
           _loading = true;
           if (!_isTransientBaiduUrl(url)) _addressController.text = url;
-          if (_tabs.isEmpty) _tabs.add(url);
-          _tabs[_tabs.length - 1] = url;
+          if (_tabs.isEmpty) {
+            _tabs.add(url);
+            _activeTabIndex = 0;
+          } else if (_activeTabIndex < 0 || _activeTabIndex >= _tabs.length) {
+            _activeTabIndex = _tabs.length - 1;
+          }
+          // 每次导航只更新当前激活标签，不能覆盖列表中的最后一个标签。
+          _tabs[_activeTabIndex] = url;
           AiWorkspace.instance.setBrowserPage(url: url);
         });
         break;
@@ -302,9 +315,19 @@ class _ProxyPinBrowserPageState extends State<ProxyPinBrowserPage> {
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           ListTile(title: Text('标签页（${_tabs.length}）'), trailing: IconButton(icon: const Icon(Icons.add), onPressed: () { Navigator.pop(sheetContext); _newTab(); })),
           ..._tabs.asMap().entries.map((entry) => ListTile(
-            leading: Icon(entry.key == _tabs.length - 1 ? Icons.check_circle : Icons.tab_outlined),
+            leading: Icon(entry.key == _activeTabIndex ? Icons.check_circle : Icons.tab_outlined),
             title: Text(entry.value, maxLines: 2, overflow: TextOverflow.ellipsis),
-            onTap: () { Navigator.pop(sheetContext); _geckoController.loadUrl(entry.value); },
+            onTap: () {
+              final url = entry.value;
+              setState(() => _activeTabIndex = entry.key);
+              Navigator.pop(sheetContext);
+              _geckoController.loadUrl(url);
+            },
+            trailing: IconButton(
+              tooltip: '关闭标签页',
+              icon: const Icon(Icons.close),
+              onPressed: () => _closeTab(entry.key, sheetContext),
+            ),
           )),
         ]),
       ),
@@ -312,8 +335,40 @@ class _ProxyPinBrowserPageState extends State<ProxyPinBrowserPage> {
   }
 
   void _newTab() {
-    setState(() => _tabs.add(_homeUrl));
+    setState(() {
+      _activeTabIndex = _tabs.length;
+      _tabs.add(_homeUrl);
+      _title = '新标签页';
+    });
     _geckoController.loadUrl(_homeUrl);
+  }
+
+  void _closeTab(int index, BuildContext sheetContext) {
+    if (index < 0 || index >= _tabs.length) return;
+
+    String? nextUrl;
+    setState(() {
+      if (_tabs.length == 1) {
+        // 保留至少一个标签，避免浏览器落入无活动标签的非法状态。
+        _tabs[0] = _homeUrl;
+        _activeTabIndex = 0;
+        nextUrl = _homeUrl;
+      } else {
+        final wasActive = index == _activeTabIndex;
+        _tabs.removeAt(index);
+        if (index < _activeTabIndex) {
+          _activeTabIndex--;
+        } else if (wasActive) {
+          _activeTabIndex = _activeTabIndex.clamp(0, _tabs.length - 1).toInt();
+          nextUrl = _tabs[_activeTabIndex];
+        }
+      }
+    });
+
+    Navigator.pop(sheetContext);
+    if (nextUrl != null) {
+      _geckoController.loadUrl(nextUrl!);
+    }
   }
 
   void _openProxy() async {
@@ -352,7 +407,7 @@ class _ProxyPinBrowserPageState extends State<ProxyPinBrowserPage> {
         bottom: _loading ? PreferredSize(preferredSize: const Size.fromHeight(2), child: LinearProgressIndicator(value: _progress == 0 ? null : _progress / 100)) : null,
       ),
       body: Stack(children: [
-        GeckoBrowserView(controller: _geckoController, initialUrl: _homeUrl, localProxyPort: ProxyServer.current?.port ?? 9099),
+        GeckoBrowserView(controller: _geckoController, initialUrl: _homeUrl, localProxyPort: _localProxyPort),
         Positioned(
           left: 12,
           bottom: 22,

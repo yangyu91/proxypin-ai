@@ -34,6 +34,7 @@ class GeckoBrowserViewFactory(private val messenger: BinaryMessenger) : Platform
 }
 
 private object GeckoRuntimeHolder {
+    private const val TAG = "GeckoRuntime"
     private var runtime: GeckoRuntime? = null
     private var configuredProxyPort: Int? = null
 
@@ -61,8 +62,15 @@ prefs:
             runtime = GeckoRuntime.create(context.applicationContext, settings)
             configuredProxyPort = localProxyPort
         } else if (configuredProxyPort != localProxyPort) {
-            Log.w("GeckoRuntime", "local proxy port changed after runtime startup; restart app to apply $localProxyPort")
+            // GeckoRuntime 的 config YAML 仅在启动时读取，且运行时关闭后不能在当前
+            // Android 进程中安全重建。Flutter 侧会在首次创建浏览器后锁定本机代理端口；
+            // 这里保留硬性保护，避免任何绕过 UI 的调用让 Firefox 静默流向旧端口。
+            throw IllegalStateException(
+                "Firefox proxy port is fixed at $configuredProxyPort for this process; " +
+                    "requested $localProxyPort. Restart the app before changing the local proxy port."
+            )
         }
+        Log.d(TAG, "Using local ProxyPin port $localProxyPort for GeckoRuntime")
         return runtime!!
     }
 }

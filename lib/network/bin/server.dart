@@ -46,6 +46,10 @@ Future<void> main() async {
 class ProxyServer {
   static ProxyServer? current;
 
+  /// GeckoRuntime 的代理偏好只会在首次创建运行时读取。浏览器首次使用本机代理后，
+  /// 本进程内必须保持同一端口；端口变更需要完全重启应用并重新创建 GeckoRuntime。
+  static int? _embeddedFirefoxProxyPort;
+
   //socket服务
   Server? server;
 
@@ -67,6 +71,28 @@ class ProxyServer {
 
   int get port => configuration.port;
 
+  /// 供内置 Firefox 使用的稳定端口；尚未创建 Firefox 时即为当前代理端口。
+  int get embeddedFirefoxProxyPort => _embeddedFirefoxProxyPort ?? port;
+
+  int? get lockedEmbeddedFirefoxProxyPort => _embeddedFirefoxProxyPort;
+
+  /// 在创建 GeckoView 前固化端口。返回 false 表示调用方请求的端口与已运行的
+  /// Firefox 运行时不一致，不能继续让 Gecko 静默使用旧端口。
+  bool reserveEmbeddedFirefoxProxyPort() {
+    final candidate = port;
+    final locked = _embeddedFirefoxProxyPort;
+    if (locked == null) {
+      _embeddedFirefoxProxyPort = candidate;
+      return true;
+    }
+    return locked == candidate;
+  }
+
+  bool canUseEmbeddedFirefoxProxyPort(int candidate) {
+    final locked = _embeddedFirefoxProxyPort;
+    return locked == null || locked == candidate;
+  }
+
   set enableSsl(bool enableSsl) {
     configuration.enableSsl = enableSsl;
     if (server == null || server?.isRunning == false) {
@@ -80,6 +106,14 @@ class ProxyServer {
 
   /// 启动代理服务
   Future<Server> start() async {
+    final lockedFirefoxPort = _embeddedFirefoxProxyPort;
+    if (lockedFirefoxPort != null && lockedFirefoxPort != port) {
+      throw StateError(
+        'Firefox GeckoView 已固定使用本机代理端口 $lockedFirefoxPort；'
+        '当前配置请求重绑到 $port。请重启应用后再修改端口。',
+      );
+    }
+
     Server server = Server(configuration, listener: CombinedEventListener(listeners));
 
     List<Interceptor> interceptors = [
