@@ -353,7 +353,36 @@ class _ProxyPinBrowserPageState extends State<ProxyPinBrowserPage> {
       ),
       body: Stack(children: [
         GeckoBrowserView(controller: _geckoController, initialUrl: _homeUrl, localProxyPort: ProxyServer.current?.port ?? 9099),
-        Positioned(left: 12, bottom: 22, child: Material(color: scheme.surfaceContainerHighest.withValues(alpha: .94), borderRadius: BorderRadius.circular(12), child: InkWell(onTap: _openHttpsStatus, borderRadius: BorderRadius.circular(12), child: Padding(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7), child: Row(mainAxisSize: MainAxisSize.min, children: [Icon(_sslMitmEnabled ? Icons.https_outlined : Icons.no_encryption_outlined, size: 16, color: _sslMitmEnabled ? Colors.green : scheme.error), const SizedBox(width: 5), Text(_sslMitmEnabled ? 'HTTPS 需信任 CA · ${_http2Enabled ? 'HTTP/2 已启用' : 'HTTP/1.1'}' : 'HTTPS 解密已关闭', style: Theme.of(context).textTheme.labelSmall)])))),
+        Positioned(
+          left: 12,
+          bottom: 22,
+          child: Material(
+            color: scheme.surfaceContainerHighest.withValues(alpha: .94),
+            borderRadius: BorderRadius.circular(12),
+            child: InkWell(
+              onTap: _openHttpsStatus,
+              borderRadius: BorderRadius.circular(12),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      _sslMitmEnabled ? Icons.https_outlined : Icons.no_encryption_outlined,
+                      size: 16,
+                      color: _sslMitmEnabled ? Colors.green : scheme.error,
+                    ),
+                    const SizedBox(width: 5),
+                    Text(
+                      _sslMitmEnabled ? 'HTTPS 需信任 CA · ${_http2Enabled ? 'HTTP/2 已启用' : 'HTTP/1.1'}' : 'HTTPS 解密已关闭',
+                      style: Theme.of(context).textTheme.labelSmall,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
         Positioned(right: 18, bottom: 22, child: FloatingActionButton.small(heroTag: 'browser-ai-fab', tooltip: 'AI 分析当前抓包', onPressed: _openAi, child: const Icon(Icons.auto_awesome_rounded)))
       ]),
       bottomNavigationBar: SafeArea(top: false, child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [
